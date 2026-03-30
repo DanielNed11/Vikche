@@ -6,14 +6,13 @@ import { useState, useTransition } from "react";
 export function SignInCard(props: {
   googleEnabled: boolean;
   appleEnabled: boolean;
-  devLoginEnabled: boolean;
   authEnabled: boolean;
 }) {
-  const { googleEnabled, appleEnabled, devLoginEnabled, authEnabled } = props;
+  const { googleEnabled, appleEnabled, authEnabled } = props;
   const [feedback, setFeedback] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
-  function handleSignIn(provider: "google" | "apple" | "credentials") {
+  function handleSignIn(provider: "google" | "apple") {
     setFeedback(null);
 
     startTransition(async () => {
@@ -27,30 +26,27 @@ export function SignInCard(props: {
     });
   }
 
-  const hasVisibleProvider = googleEnabled || appleEnabled || devLoginEnabled;
+  const hasVisibleProvider = googleEnabled || appleEnabled;
 
   return (
-    <section className="glass-panel w-full max-w-xl rounded-[30px] border px-6 py-7 shadow-[0_28px_80px_rgba(110,41,73,0.18)] sm:px-8 sm:py-9">
+    <section className="w-full max-w-xl text-center">
       <div className="space-y-4">
-        <p className="text-sm uppercase tracking-[0.28em] text-muted">
-          Вход
-        </p>
-        <h1 className="font-display text-4xl leading-none text-accent-strong sm:text-5xl">
+        <h1 className="font-brand text-[5.25rem] leading-[0.8] text-accent-strong sm:text-[7.5rem]">
           Vikche
         </h1>
-        <p className="max-w-lg text-base leading-7 text-muted sm:text-lg">
+        <p className="mx-auto max-w-lg text-base leading-7 text-muted sm:text-lg sm:leading-8">
           Влез, за да запазиш своя списък с продукти, да следиш желаните нюанси и
           да получаваш известия за намаления.
         </p>
       </div>
 
-      <div className="mt-8 space-y-3">
+      <div className="mt-8 space-y-3 rounded-[32px] border border-white/75 bg-white/82 px-4 py-4 shadow-[0_28px_70px_rgba(138,45,86,0.12)] backdrop-blur-sm sm:px-5">
         {googleEnabled ? (
           <button
             type="button"
             onClick={() => handleSignIn("google")}
             disabled={isPending}
-            className="flex w-full items-center justify-center rounded-full border border-line bg-white px-5 py-3 text-sm font-semibold text-accent-strong transition hover:border-accent/40 hover:bg-[#fff7fb] disabled:cursor-not-allowed disabled:opacity-70"
+            className="flex min-h-14 w-full items-center justify-center rounded-full border border-white/80 bg-white px-5 py-3 text-sm font-semibold text-accent-strong transition hover:border-accent/40 hover:bg-[#fff7fb] disabled:cursor-not-allowed disabled:opacity-70"
           >
             {isPending ? "Свързваме те..." : "Вход с Google"}
           </button>
@@ -61,25 +57,14 @@ export function SignInCard(props: {
             type="button"
             onClick={() => handleSignIn("apple")}
             disabled={isPending}
-            className="flex w-full items-center justify-center rounded-full border border-line bg-[#fff7fb] px-5 py-3 text-sm font-semibold text-accent-strong transition hover:border-accent/40 hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
+            className="flex min-h-14 w-full items-center justify-center rounded-full border border-white/80 bg-[#fff7fb] px-5 py-3 text-sm font-semibold text-accent-strong transition hover:border-accent/40 hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
           >
             {isPending ? "Свързваме те..." : "Вход с Apple"}
           </button>
         ) : null}
 
-        {devLoginEnabled ? (
-          <button
-            type="button"
-            onClick={() => handleSignIn("credentials")}
-            disabled={isPending}
-            className="flex w-full items-center justify-center rounded-full border border-line bg-[#fff0f6] px-5 py-3 text-sm font-semibold text-accent-strong transition hover:border-accent/40 hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            {isPending ? "Свързваме те..." : "Локален вход за разработка"}
-          </button>
-        ) : null}
-
         {!hasVisibleProvider ? (
-          <div className="rounded-[24px] border border-dashed border-line bg-white/70 px-4 py-4 text-sm leading-6 text-muted">
+          <div className="rounded-[24px] border border-dashed border-white/75 bg-white/70 px-4 py-4 text-sm leading-6 text-muted">
             {authEnabled
               ? "Няма активен доставчик за вход."
               : "SSO още не е конфигуриран. Добави OAuth данните в env променливите и презареди приложението."}

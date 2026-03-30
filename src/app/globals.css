@@ -1,10 +1,15 @@
 @import "tailwindcss";
 
 :root {
-  --background: #fff5f8;
+  --background: #fff7fb;
   --foreground: #442538;
   --font-body: "Avenir Next", "Segoe UI", sans-serif;
   --font-heading: "Iowan Old Style", "Palatino Linotype", serif;
+  --font-brand-stack:
+    var(--font-vikche-brand),
+    "Snell Roundhand",
+    "Apple Chancery",
+    cursive;
   --muted: #8f6278;
   --card: rgba(255, 255, 255, 0.8);
   --line: rgba(115, 44, 74, 0.1);
@@ -31,6 +36,7 @@
   --color-danger: var(--danger);
   --font-sans: var(--font-body);
   --font-display: var(--font-heading);
+  --font-brand: var(--font-brand-stack);
 }
 
 * {
@@ -39,16 +45,17 @@
 
 html {
   background:
-    radial-gradient(circle at top left, rgba(240, 139, 176, 0.26), transparent 24%),
-    radial-gradient(circle at top right, rgba(214, 86, 136, 0.18), transparent 28%),
-    linear-gradient(180deg, #fffafd 0%, #fff2f7 46%, #fff7fb 100%);
+    radial-gradient(circle at top left, rgba(240, 139, 176, 0.22), transparent 24%),
+    radial-gradient(circle at 82% 6%, rgba(214, 86, 136, 0.14), transparent 26%),
+    linear-gradient(180deg, #fffafd 0%, #fff5fa 48%, #fffafc 100%);
 }
 
 body {
-  background: var(--background);
+  background: transparent;
   color: var(--foreground);
   font-family: var(--font-body), sans-serif;
   min-height: 100vh;
+  line-height: 1.5;
 }
 
 a {
@@ -64,4 +71,11 @@ a {
   backdrop-filter: blur(18px);
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
 }

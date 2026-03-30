@@ -22,7 +22,6 @@ export default async function SignInPage() {
         <SignInCard
           googleEnabled={providerAvailability.google}
           appleEnabled={providerAvailability.apple}
-          devLoginEnabled={providerAvailability.devLogin}
           authEnabled={isAuthEnabled()}
         />
       </div>

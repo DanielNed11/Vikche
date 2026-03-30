@@ -2,10 +2,8 @@ import { PrismaAdapter } from "@next-auth/prisma-adapter";
 import type { NextAuthOptions } from "next-auth";
 import { getServerSession } from "next-auth";
 import AppleProvider from "next-auth/providers/apple";
-import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
 
-import { getDefaultUser } from "@/lib/default-user";
 import { prisma } from "@/lib/prisma";
 
 function getEnv(name: string) {
@@ -26,10 +24,6 @@ export function hasGoogleAuth() {
 
 export function hasAppleAuth() {
   return Boolean(getEnv("APPLE_ID") && getEnv("APPLE_SECRET"));
-}
-
-export function hasDevLogin() {
-  return process.env.NODE_ENV !== "production";
 }
 
 function getProviders() {
@@ -53,25 +47,6 @@ function getProviders() {
     );
   }
 
-  if (hasDevLogin()) {
-    providers.push(
-      CredentialsProvider({
-        id: "credentials",
-        name: "Development Login",
-        credentials: {},
-        async authorize() {
-          const user = await getDefaultUser();
-
-          return {
-            id: user.id,
-            name: user.name,
-            email: user.email,
-          };
-        },
-      }),
-    );
-  }
-
   return providers;
 }
 
@@ -83,7 +58,6 @@ export function getAuthProviderAvailability() {
   return {
     google: hasGoogleAuth(),
     apple: hasAppleAuth(),
-    devLogin: hasDevLogin(),
   };
 }
 

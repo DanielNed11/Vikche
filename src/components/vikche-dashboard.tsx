@@ -7,6 +7,7 @@ import { useState, useTransition } from "react";
 import type {
   CreateWatchResult,
   DashboardData,
+  NotificationRecord,
   ResolveDouglasResult,
   ResolvedConfigurableProduct,
   WatchMutationResult,
@@ -45,23 +46,145 @@ function statusTone(watch: WatchView) {
     return "bg-warning/10 text-warning";
   }
 
-  return "bg-accent/10 text-accent";
+  if (watch.lastStatus === "pending") {
+    return "bg-accent/8 text-accent-strong";
+  }
+
+  return "bg-accent-soft text-accent-strong";
 }
 
 function statusLabel(watch: WatchView) {
   if (watch.lastStatus === "error") {
-    return "Нуждае се от внимание";
+    return "Ще опитаме отново";
   }
 
   if (watch.lastStatus === "pending") {
-    return "Проверява се";
+    return "Проверяваме";
   }
 
   if (watch.inStock === false) {
     return "Няма наличност";
   }
 
-  return "Наличен";
+  return "Следим цената";
+}
+
+function statusMessage(watch: WatchView) {
+  if (watch.lastStatus === "error") {
+    return "Последната проверка не успя, но Vikche ще опита отново автоматично.";
+  }
+
+  if (watch.inStock === false) {
+    return "Продуктът в момента не е наличен в Douglas.";
+  }
+
+  return "Ще видиш нова цена тук веднага щом Douglas я промени.";
+}
+
+function latestNotificationFor(
+  notifications: NotificationRecord[],
+): NotificationRecord | null {
+  return notifications.reduce<NotificationRecord | null>((latest, current) => {
+    if (!latest) {
+      return current;
+    }
+
+    return new Date(current.createdAt).getTime() >
+      new Date(latest.createdAt).getTime()
+      ? current
+      : latest;
+  }, null);
+}
+
+type WatchGroup = {
+  key: string;
+  title: string | null;
+  canonicalUrl: string;
+  imageUrl: string | null;
+  masterProductCode: string | null;
+  watches: WatchView[];
+  lowestPrice: number | null;
+  latestNotification: NotificationRecord | null;
+  inStockCount: number;
+};
+
+function compareVariantWatches(left: WatchView, right: WatchView) {
+  const leftLabel = left.variantLabel ?? left.productCode ?? "";
+  const rightLabel = right.variantLabel ?? right.productCode ?? "";
+
+  return leftLabel.localeCompare(rightLabel, "bg", {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+function buildWatchGroups(watches: WatchView[]) {
+  const groups = new Map<string, WatchGroup>();
+
+  for (const watch of watches) {
+    const key = watch.masterProductCode ?? watch.canonicalUrl;
+    const existing = groups.get(key);
+
+    if (!existing) {
+      groups.set(key, {
+        key,
+        title: watch.title,
+        canonicalUrl: watch.canonicalUrl,
+        imageUrl: watch.imageUrl,
+        masterProductCode: watch.masterProductCode,
+        watches: [watch],
+        lowestPrice: watch.currentPrice,
+        latestNotification: latestNotificationFor(watch.notifications),
+        inStockCount: watch.inStock ? 1 : 0,
+      });
+      continue;
+    }
+
+    existing.watches.push(watch);
+    existing.imageUrl ||= watch.imageUrl;
+    existing.title ||= watch.title;
+    existing.inStockCount += watch.inStock ? 1 : 0;
+
+    if (
+      watch.currentPrice !== null &&
+      (existing.lowestPrice === null || watch.currentPrice < existing.lowestPrice)
+    ) {
+      existing.lowestPrice = watch.currentPrice;
+    }
+
+    const watchLatestNotification = latestNotificationFor(watch.notifications);
+    if (
+      watchLatestNotification &&
+      (!existing.latestNotification ||
+        new Date(watchLatestNotification.createdAt).getTime() >
+          new Date(existing.latestNotification.createdAt).getTime())
+    ) {
+      existing.latestNotification = watchLatestNotification;
+    }
+  }
+
+  return Array.from(groups.values()).map((group) => ({
+    ...group,
+    watches: [...group.watches].sort(compareVariantWatches),
+  }));
+}
+
+function variantLabelFor(watch: WatchView) {
+  return watch.variantLabel ?? watch.variantText ?? watch.productCode ?? "Основен вариант";
+}
+
+function variantMetaFor(watch: WatchView) {
+  const parts = [`Код ${watch.productCode ?? "Неизвестен"}`];
+
+  if (watch.variantText) {
+    parts.push(watch.variantText);
+  }
+
+  return parts.join(" · ");
+}
+
+function variantCountLabel(count: number) {
+  return count === 1 ? "1 вариант" : `${count} варианта`;
 }
 
 export function VikcheDashboard({
@@ -78,6 +201,7 @@ export function VikcheDashboard({
   const [dashboard, setDashboard] = useState(initialData);
   const [url, setUrl] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [pendingSelection, setPendingSelection] = useState<{
     url: string;
     resolved: ResolvedConfigurableProduct;
@@ -221,9 +345,7 @@ export function VikcheDashboard({
               scrapeFailureCodes.push(selectedVariantCode);
             }
           } catch {
-            requestFailures.push(
-              `${selectedVariantCode}: неуспешно добавяне.`,
-            );
+            requestFailures.push(`${selectedVariantCode}: неуспешно добавяне.`);
           }
         }
 
@@ -263,10 +385,7 @@ export function VikcheDashboard({
           feedbackParts.push(requestFailures.join(" "));
         }
 
-        setFeedback(
-          feedbackParts.join(" ") ||
-            "Не беше добавен нов нюанс.",
-        );
+        setFeedback(feedbackParts.join(" ") || "Не беше добавен нов нюанс.");
       } catch (error) {
         setFeedback(error instanceof Error ? error.message : "Нещо се обърка. Опитай отново.");
       }
@@ -304,291 +423,244 @@ export function VikcheDashboard({
     pendingSelection?.resolved.variants.filter((variant) =>
       pendingSelection.selectedVariantCodes.includes(variant.variantCode),
     ) ?? [];
+  const watchGroups = buildWatchGroups(dashboard.watches);
+
+  function isGroupExpanded(group: WatchGroup) {
+    return expandedGroups[group.key] ?? group.watches.length === 1;
+  }
+
+  function toggleGroup(group: WatchGroup) {
+    setExpandedGroups((current) => ({
+      ...current,
+      [group.key]: !(current[group.key] ?? group.watches.length === 1),
+    }));
+  }
 
   return (
-    <main className="relative min-h-screen overflow-hidden px-4 py-5 text-foreground sm:px-6 sm:py-6 lg:px-10">
-      <div className="absolute inset-x-0 top-0 h-72 bg-[radial-gradient(circle_at_top,rgba(214,86,136,0.22),transparent_58%)]" />
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
-        <section className="glass-panel overflow-hidden rounded-[30px] border px-5 py-6 sm:px-8 sm:py-8 lg:px-10">
-          <div className="space-y-8">
-            <div className="max-w-3xl space-y-4">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                <div className="space-y-4">
-                  <h1 className="font-display text-4xl leading-none text-accent-strong sm:text-5xl lg:text-6xl">
-                    Vikche
-                  </h1>
-                  <p className="max-w-2xl text-lg leading-8 text-muted sm:text-xl">
-                    Проследявай цените на продуктите, които искаш!
-                  </p>
-                </div>
-
-                <div className="flex flex-col items-start gap-3 rounded-[24px] border border-line bg-white/85 px-4 py-4 text-left shadow-[0_18px_45px_rgba(110,41,73,0.08)] sm:min-w-[240px] sm:items-end">
-                  <div>
-                    <p className="text-sm font-semibold text-accent-strong">
-                      {viewer.name ?? "Профил"}
-                    </p>
-                    <p className="mt-1 text-sm text-muted">
-                      {viewer.email ?? "Влязъл профил"}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void signOut({ callbackUrl: "/signin" });
-                    }}
-                    className="rounded-full border border-line bg-[#fff7fb] px-4 py-2 text-sm font-semibold text-accent-strong transition hover:border-accent/40 hover:bg-white"
-                  >
-                    Изход
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="max-w-4xl space-y-4">
-              <form
-                onSubmit={handleSubmit}
-                className="rounded-[28px] border border-line bg-white/90 p-4 shadow-[0_20px_50px_rgba(110,41,73,0.12)]"
-              >
-                <label
-                  htmlFor="douglas-url"
-                  className="mb-3 block text-sm font-semibold text-accent-strong"
-                >
-                  Постави линк към продукт от Douglas
-                </label>
-                <div className="flex flex-col gap-3 lg:flex-row">
-                  <input
-                    id="douglas-url"
-                    value={url}
-                    onChange={(event) => {
-                      setUrl(event.target.value);
-
-                      if (
-                        pendingSelection &&
-                        event.target.value.trim() !== pendingSelection.url
-                      ) {
-                        setPendingSelection(null);
-                      }
-                    }}
-                    placeholder="https://douglas.bg/opi-infinite-shine-60448"
-                    className="min-h-13 flex-1 rounded-2xl border border-line bg-[#fff7fb] px-4 py-3 text-sm outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/15"
-                  />
-                  <button
-                    type="submit"
-                    disabled={isPending}
-                    className="min-h-13 rounded-2xl bg-accent px-6 py-3 text-sm font-semibold text-white transition hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {isPending ? "Зареждане..." : "Добави продукт"}
-                  </button>
-                </div>
-              </form>
-
-              {feedback ? (
-                <p className="rounded-2xl border border-line bg-white/70 px-4 py-3 text-sm text-accent-strong">
-                  {feedback}
-                </p>
-              ) : null}
-            </div>
-
-            {pendingSelection ? (
-              <section className="rounded-[28px] border border-line bg-white/90 p-4 shadow-[0_20px_50px_rgba(110,41,73,0.12)]">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                  <div className="space-y-2">
-                    <p className="text-xs uppercase tracking-[0.35em] text-muted">
-                      Избери Нюанси
-                    </p>
-                    <h2 className="font-display text-2xl text-accent-strong">
-                      {pendingSelection.resolved.title}
-                    </h2>
-                    <p className="text-sm leading-6 text-muted">
-                      Избери всички нюанси, които искаш Vikche да следи.
-                      {pendingSelection.resolved.defaultVariantCode
-                        ? ` Douglas в момента показва ${pendingSelection.resolved.defaultVariantCode} по подразбиране.`
-                        : ""}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleSaveSelectedVariants}
-                    disabled={
-                      isPending || pendingSelection.selectedVariantCodes.length === 0
-                    }
-                    className="w-full rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-white transition hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60 lg:w-auto"
-                  >
-                    {isPending
-                      ? "Запазване..."
-                      : `Запази избраните нюанси${
-                          pendingSelection.selectedVariantCodes.length > 0
-                            ? ` (${pendingSelection.selectedVariantCodes.length})`
-                            : ""
-                        }`}
-                  </button>
-                </div>
-
-                {selectedVariants.length > 0 ? (
-                  <div className="mt-4 rounded-[24px] border border-line bg-[#fff4fa] p-4">
-                    <p className="text-sm font-semibold text-accent-strong">
-                      Избрани нюанси: {selectedVariants.length}
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {selectedVariants.map((variant) => (
-                        <span
-                          key={variant.variantCode}
-                          className="rounded-full bg-accent-soft px-3 py-2 text-sm text-accent-strong"
-                        >
-                          {variant.variantLabel ?? variant.variantCode}
-                          {variant.variantText ? ` · ${variant.variantText}` : ""}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-
-                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                  {pendingSelection.resolved.variants.map((variant) => {
-                    const isSelected =
-                      pendingSelection.selectedVariantCodes.includes(variant.variantCode);
-
-                    return (
-                      <button
-                        key={variant.variantCode}
-                        type="button"
-                        onClick={() =>
-                          setPendingSelection((current) =>
-                            current
-                              ? {
-                                  ...current,
-                                  selectedVariantCodes: current.selectedVariantCodes.includes(
-                                    variant.variantCode,
-                                  )
-                                    ? current.selectedVariantCodes.filter(
-                                        (code) => code !== variant.variantCode,
-                                      )
-                                    : [
-                                        ...current.selectedVariantCodes,
-                                        variant.variantCode,
-                                      ],
-                                }
-                              : current
-                          )
-                        }
-                        className={`rounded-[24px] border p-4 text-left transition ${
-                          isSelected
-                            ? "border-accent bg-accent-soft shadow-[0_12px_30px_rgba(214,86,136,0.12)]"
-                            : "border-line bg-[#fff7fb] hover:border-accent/40"
-                        }`}
-                      >
-                        <p className="text-sm font-semibold text-accent-strong">
-                          {variant.variantLabel ?? variant.variantCode}
-                        </p>
-                        <p className="mt-2 text-xs uppercase tracking-[0.2em] text-muted">
-                          {variant.variantCode}
-                        </p>
-                        <p className="mt-3 text-sm text-muted">
-                          {variant.variantText ?? "Без размер"}
-                        </p>
-                        <p className="mt-3 text-lg font-semibold text-accent-strong">
-                          {formatPrice(variant.price)}
-                        </p>
-                        {variant.originalPrice ? (
-                          <p className="mt-1 text-sm text-muted line-through">
-                            {formatPrice(variant.originalPrice)}
-                          </p>
-                        ) : null}
-                        <p className="mt-3 text-xs text-muted">
-                          {variant.inStock ? "Наличен" : "Няма наличност"}
-                        </p>
-                        <p className="mt-2 text-xs font-semibold text-accent-strong">
-                          {isSelected ? "Избран" : "Докосни за избор"}
-                        </p>
-                      </button>
-                    );
-                  })}
-                </div>
-              </section>
-            ) : null}
-
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-[28px] border border-line bg-[#fff0f6] p-5">
-                <p className="text-xs uppercase tracking-[0.28em] text-muted">
-                  Продукти
-                </p>
-                <p className="mt-4 font-display text-5xl text-accent-strong">
-                  {dashboard.stats.watchCount}
-                </p>
-                <p className="mt-3 text-sm leading-6 text-muted">
-                  Продукти в твоя списък.
-                </p>
-              </div>
-              <div className="rounded-[28px] border border-line bg-[#fff5fa] p-5">
-                <p className="text-xs uppercase tracking-[0.28em] text-muted">
-                  Налични
-                </p>
-                <p className="mt-4 font-display text-5xl text-accent-strong">
-                  {dashboard.stats.inStockCount}
-                </p>
-                <p className="mt-3 text-sm leading-6 text-muted">
-                  Продукти с налична последна оферта.
-                </p>
-              </div>
-              <div className="rounded-[28px] border border-line bg-[#ffeef4] p-5">
-                <p className="text-xs uppercase tracking-[0.28em] text-muted">
-                  За проверка
-                </p>
-                <p className="mt-4 font-display text-5xl text-accent-strong">
-                  {dashboard.stats.dueCount}
-                </p>
-                <p className="mt-3 text-sm leading-6 text-muted">
-                  Продукти, които чакат следваща проверка.
-                </p>
-              </div>
-              <div className="rounded-[28px] border border-line bg-[#fff2f7] p-5">
-                <p className="text-xs uppercase tracking-[0.28em] text-muted">
-                  Намаления
-                </p>
-                <p className="mt-4 font-display text-5xl text-accent-strong">
-                  {dashboard.stats.priceDropCount}
-                </p>
-                <p className="mt-3 text-sm leading-6 text-muted">
-                  Засечени по-ниски цени.
-                </p>
-              </div>
-            </div>
+    <main className="relative min-h-screen overflow-hidden px-4 pb-12 pt-4 text-foreground sm:px-6 sm:pb-16 sm:pt-5 lg:px-10">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(214,86,136,0.18),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(240,139,176,0.12),transparent_26%)]" />
+      <div className="relative mx-auto flex w-full max-w-6xl flex-col">
+        <div className="flex justify-end">
+          <div className="inline-flex items-center gap-3 rounded-full border border-white/70 bg-white/72 px-3 py-2 text-sm shadow-[0_16px_40px_rgba(138,45,86,0.08)] backdrop-blur-sm">
+            <span className="hidden max-w-[15rem] truncate text-muted sm:inline">
+              {viewer.name ?? viewer.email ?? "Vikche"}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                void signOut({ callbackUrl: "/signin" });
+              }}
+              className="rounded-full px-3 py-1 font-semibold text-accent-strong transition hover:bg-accent-soft"
+            >
+              Изход
+            </button>
           </div>
+        </div>
+
+        <section className="mx-auto flex min-h-[58vh] w-full max-w-3xl flex-col items-center justify-center pb-12 pt-8 text-center sm:min-h-[64vh] sm:pb-16 sm:pt-14">
+          <h1 className="font-brand text-[5.7rem] leading-[0.8] tracking-[0.01em] text-accent-strong sm:text-[8.25rem] lg:text-[10.5rem]">
+            Vikche
+          </h1>
+          <p className="mt-3 max-w-md text-base leading-7 text-muted sm:mt-4 sm:text-lg sm:leading-8">
+            Проследявай цените на продуктите, които искаш!
+          </p>
+
+          <form onSubmit={handleSubmit} className="mt-8 w-full">
+            <label htmlFor="douglas-url" className="sr-only">
+              Постави линк към продукт от Douglas
+            </label>
+            <div className="rounded-[32px] border border-white/75 bg-white/82 p-3 shadow-[0_28px_70px_rgba(138,45,86,0.12)] backdrop-blur-sm sm:p-4">
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <input
+                  id="douglas-url"
+                  value={url}
+                  onChange={(event) => {
+                    setUrl(event.target.value);
+
+                    if (
+                      pendingSelection &&
+                      event.target.value.trim() !== pendingSelection.url
+                    ) {
+                      setPendingSelection(null);
+                    }
+                  }}
+                  placeholder="https://douglas.bg/mac-lip-pencil-conf-78140"
+                  className="min-h-14 w-full rounded-[24px] border border-transparent bg-[#fff8fb] px-4 py-4 text-[15px] outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/15"
+                />
+                <button
+                  type="submit"
+                  disabled={isPending}
+                  className="min-h-14 w-full rounded-[24px] bg-accent px-6 py-4 text-sm font-semibold text-white transition hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[11rem]"
+                >
+                  {isPending ? "Зареждане..." : "Добави продукт"}
+                </button>
+              </div>
+            </div>
+          </form>
+
+          {feedback ? (
+            <p className="mt-4 w-full rounded-[24px] border border-white/70 bg-white/76 px-4 py-3 text-sm leading-6 text-accent-strong shadow-[0_16px_35px_rgba(138,45,86,0.08)]">
+              {feedback}
+            </p>
+          ) : null}
         </section>
 
-        <section className="grid gap-6 xl:grid-cols-[1.3fr_0.7fr]">
-          <div className="glass-panel rounded-[32px] border p-5 sm:p-6">
-            <div className="mb-5 border-b border-line pb-5">
-              <div>
-                <p className="text-xs uppercase tracking-[0.35em] text-muted">
-                  Списък
+        {pendingSelection ? (
+          <section className="mx-auto w-full max-w-5xl rounded-[34px] border border-white/75 bg-white/84 p-4 shadow-[0_30px_80px_rgba(138,45,86,0.14)] backdrop-blur-sm sm:p-6">
+            <div className="flex flex-col gap-5">
+              <div className="space-y-3 text-center sm:text-left">
+                <p className="text-xs uppercase tracking-[0.28em] text-muted">
+                  Избери нюансите
                 </p>
-                <h2 className="mt-2 font-display text-3xl text-accent-strong">
-                  Следени продукти
+                <h2 className="text-2xl font-semibold text-accent-strong sm:text-3xl">
+                  {pendingSelection.resolved.title}
                 </h2>
+                <p className="text-sm leading-7 text-muted">
+                  Избери всички нюанси, които искаш Vikche да следи.
+                  {pendingSelection.resolved.defaultVariantCode
+                    ? ` Douglas в момента показва ${pendingSelection.resolved.defaultVariantCode} по подразбиране.`
+                    : ""}
+                </p>
               </div>
-            </div>
 
-            <div className="space-y-4">
-              {dashboard.watches.length === 0 ? (
-                <div className="rounded-[28px] border border-dashed border-line bg-white/55 px-6 py-10 text-center text-sm leading-7 text-muted">
-                  Добави първия продукт от Douglas, за да започнеш да следиш цените.
+              {selectedVariants.length > 0 ? (
+                <div className="flex flex-wrap justify-center gap-2 sm:justify-start">
+                  {selectedVariants.map((variant) => (
+                    <span
+                      key={variant.variantCode}
+                      className="rounded-full bg-accent-soft px-3 py-2 text-sm text-accent-strong"
+                    >
+                      {variant.variantLabel ?? variant.variantCode}
+                      {variant.variantText ? ` · ${variant.variantText}` : ""}
+                    </span>
+                  ))}
                 </div>
-              ) : (
-                dashboard.watches.map((watch) => (
+              ) : null}
+
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {pendingSelection.resolved.variants.map((variant) => {
+                  const isSelected =
+                    pendingSelection.selectedVariantCodes.includes(variant.variantCode);
+
+                  return (
+                    <button
+                      key={variant.variantCode}
+                      type="button"
+                      onClick={() =>
+                        setPendingSelection((current) =>
+                          current
+                            ? {
+                                ...current,
+                                selectedVariantCodes: current.selectedVariantCodes.includes(
+                                  variant.variantCode,
+                                )
+                                  ? current.selectedVariantCodes.filter(
+                                      (code) => code !== variant.variantCode,
+                                    )
+                                  : [...current.selectedVariantCodes, variant.variantCode],
+                              }
+                            : current,
+                        )
+                      }
+                      className={`rounded-[26px] border px-4 py-4 text-left transition ${
+                        isSelected
+                          ? "border-accent bg-accent-soft shadow-[0_16px_35px_rgba(214,86,136,0.12)]"
+                          : "border-white/70 bg-[#fff9fc] hover:border-accent/40"
+                      }`}
+                    >
+                      <p className="text-sm font-semibold text-accent-strong">
+                        {variant.variantLabel ?? variant.variantCode}
+                      </p>
+                      <p className="mt-2 text-xs uppercase tracking-[0.2em] text-muted">
+                        {variant.variantCode}
+                      </p>
+                      <p className="mt-3 text-sm text-muted">
+                        {variant.variantText ?? "Без размер"}
+                      </p>
+                      <p className="mt-3 text-lg font-semibold text-accent-strong">
+                        {formatPrice(variant.price)}
+                      </p>
+                      {variant.originalPrice ? (
+                        <p className="mt-1 text-sm text-muted line-through">
+                          {formatPrice(variant.originalPrice)}
+                        </p>
+                      ) : null}
+                      <p className="mt-3 text-xs text-muted">
+                        {variant.inStock ? "Наличен" : "Няма наличност"}
+                      </p>
+                      <p className="mt-2 text-xs font-semibold text-accent-strong">
+                        {isSelected ? "Избран" : "Докосни за избор"}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <button
+                type="button"
+                onClick={handleSaveSelectedVariants}
+                disabled={
+                  isPending || pendingSelection.selectedVariantCodes.length === 0
+                }
+                className="min-h-14 w-full rounded-[24px] bg-accent px-5 py-4 text-sm font-semibold text-white transition hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60 sm:self-start sm:px-7"
+              >
+                {isPending
+                  ? "Запазване..."
+                  : `Запази избраните нюанси${
+                      pendingSelection.selectedVariantCodes.length > 0
+                        ? ` (${pendingSelection.selectedVariantCodes.length})`
+                        : ""
+                    }`}
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        <section className="mt-10 w-full sm:mt-12">
+          <div className="mb-5 flex items-end justify-between gap-4">
+            <div>
+              <p className="text-xs uppercase tracking-[0.28em] text-muted">
+                Списък
+              </p>
+              <h2 className="mt-2 text-2xl font-semibold text-accent-strong sm:text-3xl">
+                Следени продукти
+              </h2>
+            </div>
+            <div className="text-right">
+              <p className="text-sm text-muted">
+                {watchGroups.length} {watchGroups.length === 1 ? "продукт" : "продукта"}
+              </p>
+              <p className="text-xs text-muted">
+                {dashboard.watches.length}{" "}
+                {dashboard.watches.length === 1 ? "следен вариант" : "следени варианта"}
+              </p>
+            </div>
+          </div>
+
+          {watchGroups.length === 0 ? (
+            <div className="rounded-[30px] border border-dashed border-white/80 bg-white/58 px-6 py-10 text-center text-sm leading-7 text-muted">
+              Добави първия продукт от Douglas, за да започнеш да следиш цените.
+            </div>
+          ) : (
+            <div className="space-y-4 sm:space-y-5">
+              {watchGroups.map((group) => {
+                const allInStock = group.inStockCount === group.watches.length;
+                const expanded = isGroupExpanded(group);
+
+                return (
                   <article
-                    key={watch.id}
-                    className="rounded-[28px] border border-line bg-white/70 p-4 shadow-[0_12px_40px_rgba(110,41,73,0.1)] sm:p-5"
+                    key={group.key}
+                    className="rounded-[32px] border border-white/75 bg-white/82 p-4 shadow-[0_24px_65px_rgba(138,45,86,0.11)] backdrop-blur-sm sm:p-6"
                   >
-                    <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
-                      <div className="flex min-w-0 flex-1 items-start gap-4">
-                        <div className="h-24 w-20 overflow-hidden rounded-[24px] border border-line bg-[#fff1f7] sm:h-28 sm:w-24">
-                          {watch.imageUrl ? (
+                    <div className="flex flex-col gap-5">
+                      <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+                        <div className="mx-auto h-28 w-24 overflow-hidden rounded-[28px] bg-[#fff0f6] sm:mx-0 sm:h-32 sm:w-28">
+                          {group.imageUrl ? (
                             <Image
-                              src={watch.imageUrl}
-                              alt={watch.title ?? "Продукт от Douglas"}
-                              width={192}
-                              height={224}
+                              src={group.imageUrl}
+                              alt={group.title ?? "Продукт от Douglas"}
+                              width={224}
+                              height={256}
                               className="h-full w-full object-cover"
                             />
                           ) : (
@@ -597,177 +669,159 @@ export function VikcheDashboard({
                             </div>
                           )}
                         </div>
-                        <div className="min-w-0 flex-1 space-y-2">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span
-                              className={`rounded-full px-3 py-1 text-xs font-semibold ${statusTone(watch)}`}
-                            >
-                              {statusLabel(watch)}
+
+                        <div className="min-w-0 flex-1 text-center sm:text-left">
+                          <button
+                            type="button"
+                            onClick={() => toggleGroup(group)}
+                            aria-expanded={expanded}
+                            className="mt-4 inline-flex min-h-12 w-full items-center justify-center rounded-full border border-white/80 bg-white px-4 py-3 text-sm font-semibold text-accent-strong transition hover:border-accent/45 hover:bg-[#fff8fb] sm:w-auto"
+                          >
+                            <div className="flex flex-wrap items-center justify-center gap-2">
+                              <span className="rounded-full bg-accent-soft px-3 py-1 text-xs font-semibold text-accent-strong">
+                                {variantCountLabel(group.watches.length)}
+                              </span>
+                              <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-muted">
+                                {allInStock
+                                  ? "Всички налични"
+                                  : `${group.inStockCount}/${group.watches.length} налични`}
+                              </span>
+                            </div>
+                            <span className="text-sm font-semibold text-accent-strong">
+                              {expanded ? "Скрий нюансите" : "Покажи нюансите"}
                             </span>
-                          </div>
-                          <h3 className="max-w-xl break-words font-display text-xl leading-tight text-accent-strong sm:text-2xl">
-                            {watch.title ?? watch.canonicalUrl}
+                          </button>
+
+                          <h3 className="mt-3 break-words text-xl font-semibold leading-tight text-accent-strong sm:text-2xl">
+                            {group.title ?? group.canonicalUrl}
                           </h3>
-                          <p className="text-sm text-muted">
-                            Код на продукта: {watch.productCode ?? "Неизвестен"}
-                            {watch.variantLabel ? ` · Нюанс ${watch.variantLabel}` : ""}
-                            {watch.variantText ? ` · ${watch.variantText}` : ""}
+
+                          <p className="mt-2 text-sm leading-6 text-muted">
+                            {group.lowestPrice !== null
+                              ? `Най-добра текуща цена от ${formatPrice(group.lowestPrice)}`
+                              : "Все още няма записана цена"}
                           </p>
-                          <div className="flex flex-wrap gap-3 text-sm text-muted">
-                            <a
-                              href={watch.canonicalUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="rounded-full border border-line bg-white px-3 py-1 hover:border-accent hover:text-accent"
-                            >
-                              Отвори в Douglas
-                            </a>
-                            <button
-                              type="button"
-                              onClick={() => handleRefresh(watch.id)}
-                              disabled={isPending}
-                              className="rounded-full border border-line bg-white px-3 py-1 hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              Обнови
-                            </button>
-                          </div>
+
+                          {group.latestNotification ? (
+                            <p className="mt-3 text-sm leading-6 text-accent-strong">
+                              Последно намаление:{" "}
+                              {formatPrice(group.latestNotification.previousPrice)} →{" "}
+                              {formatPrice(group.latestNotification.currentPrice)}
+                            </p>
+                          ) : null}
                         </div>
                       </div>
 
-                      <div className="grid gap-3 sm:grid-cols-3 lg:w-[24rem] lg:flex-none xl:w-[28rem]">
-                        <div className="rounded-3xl bg-[#fff4fa] p-4">
-                          <p className="text-xs uppercase tracking-[0.28em] text-muted">
-                            Текуща цена
-                          </p>
-                          <p className="mt-3 text-2xl font-semibold text-accent-strong">
-                            {formatPrice(watch.currentPrice)}
-                          </p>
-                          {watch.originalPrice ? (
-                            <p className="mt-2 text-sm text-muted line-through">
-                              {formatPrice(watch.originalPrice)}
-                            </p>
-                          ) : (
-                            <p className="mt-2 text-sm text-muted">
-                              Няма предишна цена
-                            </p>
-                          )}
-                        </div>
-                        <div className="rounded-3xl bg-[#fff7fb] p-4">
-                          <p className="text-xs uppercase tracking-[0.28em] text-muted">
-                            Последна проверка
-                          </p>
-                          <p className="mt-3 text-sm font-semibold leading-6 text-accent-strong">
-                            {formatDate(watch.lastCheckedAt)}
-                          </p>
-                          <p className="mt-2 text-sm text-muted">
-                            {watch.lastStatus === "error"
-                              ? "Не успяхме да обновим този продукт при последната проверка."
-                              : "Последната цена е запазена."}
-                          </p>
-                        </div>
-                        <div className="rounded-3xl bg-[#fff0f6] p-4">
-                          <p className="text-xs uppercase tracking-[0.28em] text-muted">
-                            Известия
-                          </p>
-                          <p className="mt-3 text-2xl font-semibold text-accent-strong">
-                            {watch.notifications.length}
-                          </p>
-                          <p className="mt-2 text-sm text-muted">
-                            {watch.lastNotificationAt
-                              ? `Последно известие ${formatDate(watch.lastNotificationAt)}`
-                              : "Все още няма известия за намаление"}
-                          </p>
-                        </div>
+                      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                        <a
+                          href={group.canonicalUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex min-h-12 w-full items-center justify-center rounded-full border border-white/80 bg-white px-4 py-3 text-sm font-semibold text-accent-strong transition hover:border-accent/45 hover:bg-[#fff8fb] sm:w-auto"
+                        >
+                          Отвори в Douglas
+                        </a>
                       </div>
-                    </div>
 
-                    <div className="mt-5">
-                      <div className="rounded-[26px] border border-line bg-[#fff7fb] p-4">
-                        <div className="mb-4 flex items-center justify-between">
-                          <p className="text-sm font-semibold text-accent-strong">
-                            Последни цени
-                          </p>
-                          <p className="text-xs uppercase tracking-[0.28em] text-muted">
-                            {watch.history.length} записа
-                          </p>
-                        </div>
+                      {expanded ? (
                         <div className="space-y-3">
-                          {watch.history.length === 0 ? (
-                            <p className="text-sm text-muted">
-                              Все още няма записани цени.
-                            </p>
-                          ) : (
-                            watch.history.map((snapshot) => (
+                          {group.watches.map((watch) => {
+                            const latestNotification = latestNotificationFor(
+                              watch.notifications,
+                            );
+
+                            return (
                               <div
-                                key={snapshot.id}
-                                className="flex flex-col gap-2 rounded-2xl bg-white px-3 py-3 text-sm sm:flex-row sm:items-center sm:justify-between"
+                                key={watch.id}
+                                className="rounded-[28px] bg-[#fff7fb] px-4 py-4 sm:px-5"
                               >
-                                <div>
-                                  <p className="font-semibold text-accent-strong">
-                                    {formatPrice(snapshot.price)}
-                                  </p>
-                                  <p className="text-xs text-muted">
-                                    {snapshot.inStock ? "Наличен" : "Няма наличност"}
-                                  </p>
+                                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                                  <div className="min-w-0">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span
+                                        className={`rounded-full px-3 py-1 text-xs font-semibold ${statusTone(watch)}`}
+                                      >
+                                        {statusLabel(watch)}
+                                      </span>
+                                    </div>
+                                    <h4 className="mt-3 text-lg font-semibold text-accent-strong">
+                                      {variantLabelFor(watch)}
+                                    </h4>
+                                    <p className="mt-1 text-sm text-muted">
+                                      {variantMetaFor(watch)}
+                                    </p>
+                                    {latestNotification ? (
+                                      <p className="mt-3 text-sm leading-6 text-accent-strong">
+                                        Намаление: {formatPrice(latestNotification.previousPrice)} →{" "}
+                                        {formatPrice(latestNotification.currentPrice)}
+                                      </p>
+                                    ) : null}
+                                    <p className="mt-2 text-sm leading-6 text-muted">
+                                      {statusMessage(watch)}
+                                    </p>
+                                  </div>
+
+                                  <div className="sm:max-w-xs sm:text-right">
+                                    <p className="text-xs uppercase tracking-[0.24em] text-muted">
+                                      Текуща цена
+                                    </p>
+                                    <p className="mt-2 text-2xl font-semibold text-accent-strong">
+                                      {formatPrice(watch.currentPrice)}
+                                    </p>
+                                    {watch.originalPrice ? (
+                                      <p className="mt-2 text-sm text-muted line-through">
+                                        {formatPrice(watch.originalPrice)}
+                                      </p>
+                                    ) : null}
+                                    <p className="mt-3 text-sm font-semibold text-accent-strong">
+                                      {formatDate(watch.lastCheckedAt)}
+                                    </p>
+                                  </div>
                                 </div>
-                                <p className="text-xs text-muted">
-                                  {formatDate(snapshot.scrapedAt)}
-                                </p>
+
+                                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                                  {watch.history.length === 0 ? (
+                                    <p className="text-sm leading-6 text-muted">
+                                      Все още няма записани цени.
+                                    </p>
+                                  ) : (
+                                    <div className="flex gap-2 overflow-x-auto pb-1">
+                                      {watch.history.slice(0, 3).map((snapshot) => (
+                                        <div
+                                          key={snapshot.id}
+                                          className="min-w-[9.5rem] shrink-0 rounded-[20px] bg-white px-3 py-3 shadow-[0_8px_24px_rgba(138,45,86,0.06)]"
+                                        >
+                                          <p className="text-sm font-semibold text-accent-strong">
+                                            {formatPrice(snapshot.price)}
+                                          </p>
+                                          <p className="mt-1 text-xs text-muted">
+                                            {snapshot.inStock ? "Наличен" : "Няма наличност"}
+                                          </p>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRefresh(watch.id)}
+                                    disabled={isPending}
+                                    className="min-h-12 w-full rounded-full border border-white/80 bg-white px-4 py-3 text-sm font-semibold text-accent-strong transition hover:border-accent/45 hover:bg-[#fff8fb] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                                  >
+                                    Обнови нюанса
+                                  </button>
+                                </div>
                               </div>
-                            ))
-                          )}
+                            );
+                          })}
                         </div>
-                      </div>
+                      ) : null}
                     </div>
                   </article>
-                ))
-              )}
+                );
+              })}
             </div>
-          </div>
-
-          <aside className="glass-panel rounded-[32px] border p-5 sm:p-6">
-            <div className="border-b border-line pb-5">
-              <p className="text-xs uppercase tracking-[0.35em] text-muted">
-                Известия
-              </p>
-              <h2 className="mt-2 font-display text-3xl text-accent-strong">
-                Последни известия
-              </h2>
-              <p className="mt-3 text-sm leading-6 text-muted">
-                Когато цената падне, ще видиш известието тук.
-              </p>
-            </div>
-
-            <div className="mt-5 space-y-3">
-              {dashboard.recentNotifications.length === 0 ? (
-                <div className="rounded-[26px] border border-dashed border-line bg-white/55 px-5 py-8 text-sm leading-6 text-muted">
-                  Все още няма намаления. Когато засечем по-ниска цена, тя ще се появи тук.
-                </div>
-              ) : (
-                dashboard.recentNotifications.map((notification) => (
-                  <div
-                    key={notification.id}
-                    className="rounded-[24px] border border-line bg-white/70 p-4"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-sm font-semibold text-accent-strong">
-                        {notification.subject}
-                      </p>
-                    </div>
-                    <p className="mt-3 text-sm text-muted">
-                      {formatPrice(notification.previousPrice)} → {formatPrice(notification.currentPrice)}
-                    </p>
-                    <p className="mt-2 text-xs leading-5 text-muted">
-                      {notification.message}
-                    </p>
-                    <p className="mt-3 text-xs uppercase tracking-[0.24em] text-muted">
-                      {formatDate(notification.createdAt)}
-                    </p>
-                  </div>
-                ))
-              )}
-            </div>
-          </aside>
+          )}
         </section>
       </div>
     </main>

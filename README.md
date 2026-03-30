@@ -14,7 +14,6 @@ Vikche is a Douglas-first price tracker built as a Next.js web app. It accepts `
   - `Notification`
 - Google SSO with NextAuth and Prisma-backed users
 - Apple sign-in path ready behind env configuration
-- Development-only login button so you can test sign-in and sign-out before Google OAuth is configured
 - API routes to create/list watches, refresh a single watch, and run due daily checks
 - Mobile-first dashboard UI for adding products, choosing Douglas shades, and viewing price history
 - Daily worker route ready for Vercel Cron Jobs
@@ -77,11 +76,9 @@ Optional:
 - `VIKCHE_ALERT_TO`
 - `APPLE_ID`
 - `APPLE_SECRET`
-- `VIKCHE_DEFAULT_USER_EMAIL`
-- `VIKCHE_DEFAULT_USER_NAME`
 
 If no Resend credentials are configured, notifications are still created and marked as `logged`.
-If Google OAuth is not configured, Vikche still requires sign-in. In development, `/signin` shows a local development login button so you can test the full login/logout flow without Google credentials.
+If Google OAuth is not configured, Vikche still requires sign-in, and no local fallback login is available.
 
 ## Scraping
 
