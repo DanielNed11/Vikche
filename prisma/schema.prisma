@@ -1,0 +1,204 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum RetailerSlug {
+  DOUGLAS
+}
+
+enum ExtractorKind {
+  HTTP
+  PLAYWRIGHT
+}
+
+enum WatchStatus {
+  PENDING
+  OK
+  ERROR
+}
+
+enum NotificationKind {
+  PRICE_DROP
+}
+
+enum NotificationChannel {
+  EMAIL
+  LOG
+}
+
+enum NotificationStatus {
+  QUEUED
+  SENT
+  LOGGED
+  FAILED
+}
+
+enum CurrencyCode {
+  EUR
+}
+
+model User {
+  id             String         @id @default(cuid())
+  name           String?
+  email          String?        @unique
+  emailVerified  DateTime?
+  image          String?
+  accounts       Account[]
+  sessions       Session[]
+  productWatches ProductWatch[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+}
+
+model Account {
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([provider, providerAccountId])
+}
+
+model Session {
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([sessionToken])
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@id([identifier, token])
+}
+
+model Retailer {
+  id           String         @id @default(cuid())
+  slug         RetailerSlug   @unique
+  name         String
+  baseUrl      String
+  active       Boolean        @default(true)
+  storeProducts StoreProduct[]
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+}
+
+model StoreProduct {
+  id                        String           @id @default(cuid())
+  retailerId                String
+  canonicalUrl              String
+  productUrl                String
+  externalProductCode       String
+  externalMasterProductCode String?
+  title                     String?
+  brand                     String?
+  variantLabel              String?
+  variantText               String?
+  imageUrl                  String?
+  currentPrice              Decimal?
+  originalPrice             Decimal?
+  currency                  CurrencyCode     @default(EUR)
+  inStock                   Boolean?
+  lastCheckedAt             DateTime?
+  lastStatus                WatchStatus      @default(PENDING)
+  lastError                 String?
+  lastExtractor             ExtractorKind?
+  createdAt                 DateTime         @default(now())
+  updatedAt                 DateTime         @updatedAt
+
+  retailer      Retailer        @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+  productWatches ProductWatch[]
+  priceSnapshots PriceSnapshot[]
+  scrapeAttempts ScrapeAttempt[]
+
+  @@unique([retailerId, externalProductCode])
+  @@index([retailerId, canonicalUrl])
+}
+
+model ProductWatch {
+  id                   String         @id @default(cuid())
+  userId               String
+  storeProductId       String
+  lastNotifiedSnapshotId String?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  user                 User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  storeProduct         StoreProduct   @relation(fields: [storeProductId], references: [id], onDelete: Cascade)
+  lastNotifiedSnapshot PriceSnapshot? @relation("LastNotifiedSnapshot", fields: [lastNotifiedSnapshotId], references: [id], onDelete: SetNull)
+  notifications        Notification[]
+
+  @@unique([userId, storeProductId])
+  @@index([storeProductId])
+}
+
+model PriceSnapshot {
+  id                       String         @id @default(cuid())
+  storeProductId           String
+  price                    Decimal
+  originalPrice            Decimal?
+  currency                 CurrencyCode   @default(EUR)
+  inStock                  Boolean
+  extractor                ExtractorKind
+  scrapedAt                DateTime
+
+  storeProduct             StoreProduct   @relation(fields: [storeProductId], references: [id], onDelete: Cascade)
+  lastNotifiedByWatches    ProductWatch[] @relation("LastNotifiedSnapshot")
+  previousForNotifications Notification[] @relation("PreviousSnapshot")
+  triggeringNotifications  Notification[] @relation("TriggeringSnapshot")
+
+  @@index([storeProductId, scrapedAt(sort: Desc)])
+}
+
+model ScrapeAttempt {
+  id             String        @id @default(cuid())
+  storeProductId String
+  extractor      ExtractorKind
+  ok             Boolean
+  error          String?
+  createdAt      DateTime      @default(now())
+
+  storeProduct StoreProduct @relation(fields: [storeProductId], references: [id], onDelete: Cascade)
+
+  @@index([storeProductId, createdAt(sort: Desc)])
+}
+
+model Notification {
+  id                 String              @id @default(cuid())
+  productWatchId     String
+  kind               NotificationKind    @default(PRICE_DROP)
+  channel            NotificationChannel @default(LOG)
+  status             NotificationStatus  @default(QUEUED)
+  previousSnapshotId String
+  triggeringSnapshotId String
+  deliveryError      String?
+  createdAt          DateTime            @default(now())
+  deliveredAt        DateTime?
+
+  productWatch       ProductWatch   @relation(fields: [productWatchId], references: [id], onDelete: Cascade)
+  previousSnapshot   PriceSnapshot  @relation("PreviousSnapshot", fields: [previousSnapshotId], references: [id], onDelete: Cascade)
+  triggeringSnapshot PriceSnapshot  @relation("TriggeringSnapshot", fields: [triggeringSnapshotId], references: [id], onDelete: Cascade)
+
+  @@unique([productWatchId, triggeringSnapshotId, kind])
+  @@index([productWatchId, createdAt(sort: Desc)])
+}
