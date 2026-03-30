@@ -437,7 +437,7 @@ export function VikcheDashboard({
   }
 
   return (
-    <main className="relative min-h-screen overflow-hidden px-4 pb-12 pt-4 text-foreground sm:px-6 sm:pb-16 sm:pt-5 lg:px-10">
+    <main className="safe-page relative overflow-hidden px-4 text-foreground sm:px-6 lg:px-10">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(214,86,136,0.18),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(240,139,176,0.12),transparent_26%)]" />
       <div className="relative mx-auto flex w-full max-w-6xl flex-col">
         <div className="flex justify-end">

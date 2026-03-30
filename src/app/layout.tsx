@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 
 import "./globals.css";
@@ -12,6 +12,10 @@ const hughIsLife = localFont({
 export const metadata: Metadata = {
   title: "Vikche",
   description: "Проследявай цените на продуктите, които искаш!",
+};
+
+export const viewport: Viewport = {
+  themeColor: "#fff5fa",
 };
 
 export default function RootLayout({
