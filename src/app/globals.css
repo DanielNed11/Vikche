@@ -20,6 +20,10 @@
   --warning: #c67058;
   --danger: #b43e63;
   --shadow: 0 24px 80px rgba(138, 45, 86, 0.14);
+  --page-background:
+    radial-gradient(circle at top left, rgba(240, 139, 176, 0.22), transparent 24%),
+    radial-gradient(circle at 82% 6%, rgba(214, 86, 136, 0.14), transparent 26%),
+    linear-gradient(180deg, #fffafd 0%, #fff5fa 48%, #fffafc 100%);
 }
 
 @theme inline {
@@ -46,15 +50,13 @@
 html {
   min-height: 100%;
   background-color: var(--background);
-  background:
-    radial-gradient(circle at top left, rgba(240, 139, 176, 0.22), transparent 24%),
-    radial-gradient(circle at 82% 6%, rgba(214, 86, 136, 0.14), transparent 26%),
-    linear-gradient(180deg, #fffafd 0%, #fff5fa 48%, #fffafc 100%);
+  background-image: var(--page-background);
 }
 
 body {
   min-height: 100%;
-  background: inherit;
+  background-color: var(--background);
+  background-image: var(--page-background);
   color: var(--foreground);
   font-family: var(--font-body), sans-serif;
   line-height: 1.5;

@@ -1,4 +1,4 @@
-import { VikcheDashboard } from "@/components/vikche-dashboard";
+import { VikcheDashboard } from "@/components/dashboard/vikche-dashboard";
 import { getDashboardData } from "@/lib/watch-service";
 import { getOptionalViewer } from "@/lib/viewer";
 import { redirect } from "next/navigation";
@@ -20,7 +20,6 @@ export default async function Home() {
       viewer={{
         name: viewer.name,
         email: viewer.email,
-        authEnabled: viewer.authEnabled,
       }}
     />
   );
