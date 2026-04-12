@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build --webpack",
     "start": "next start",
-    "postinstall": "prisma generate",
+    "postinstall": "prisma generate && PLAYWRIGHT_BROWSERS_PATH=0 playwright install chromium",
     "lint": "eslint",
     "test": "node --import tsx --test src/**/*.test.ts",
     "worker:due": "node --import tsx scripts/run-due-checks.ts",
