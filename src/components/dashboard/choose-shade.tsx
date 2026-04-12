@@ -20,17 +20,20 @@ export function ChooseShade() {
       <div className="flex flex-col gap-5">
         <div className="space-y-3 text-center sm:text-left">
           <p className="text-xs uppercase tracking-[0.28em] text-muted">
-            Избери нюансите
+            Избери вариантите
           </p>
           <h2 className="text-2xl font-semibold text-accent-strong sm:text-3xl">
             {pendingSelection.resolved.title}
           </h2>
           <p className="text-sm leading-7 text-muted">
-            Избери всички нюанси, които искаш Vikche да следи.
-            {pendingSelection.resolved.defaultVariantCode
-              ? ` Douglas в момента показва ${pendingSelection.resolved.defaultVariantCode} по подразбиране.`
-              : ""}
+            Избери всички варианти, които искаш Vikche да следи.
           </p>
+          {pendingSelection.resolved.discountCode ? (
+            <p className="text-sm leading-7 text-accent-strong">
+              Код за отстъпка:{" "}
+              <span className="font-semibold">{pendingSelection.resolved.discountCode}</span>
+            </p>
+          ) : null}
         </div>
 
         {selectedVariants.length > 0 ? (
@@ -64,14 +67,11 @@ export function ChooseShade() {
                 }`}
               >
                 <p className="text-sm font-semibold text-accent-strong">
-                  {variant.variantLabel ?? variant.variantCode}
+                  {variant.variantLabel ?? variant.variantText ?? "Вариант"}
                 </p>
-                <p className="mt-2 text-xs uppercase tracking-[0.2em] text-muted">
-                  {variant.variantCode}
-                </p>
-                <p className="mt-3 text-sm text-muted">
-                  {variant.variantText ?? "Без размер"}
-                </p>
+                {variant.variantText ? (
+                  <p className="mt-3 text-sm text-muted">{variant.variantText}</p>
+                ) : null}
                 <p className="mt-3 text-lg font-semibold text-accent-strong">
                   {formatPrice(variant.price)}
                 </p>
@@ -81,7 +81,7 @@ export function ChooseShade() {
                   </p>
                 ) : null}
                 <p className="mt-3 text-xs text-muted">
-                  {variant.inStock ? "Наличен" : "Няма наличност"}
+                  {variant.inStock ? "Наличен" : "В момента няма наличност"}
                 </p>
                 <p className="mt-2 text-xs font-semibold text-accent-strong">
                   {isSelected ? "Избран" : "Докосни за избор"}
@@ -100,7 +100,7 @@ export function ChooseShade() {
           <LoadingLabel
             isPending={isPending}
             loading="Запазване..."
-            idle={`Запази избраните нюанси${
+            idle={`Запази избраните варианти${
               pendingSelection.selectedVariantCodes.length > 0
                 ? ` (${pendingSelection.selectedVariantCodes.length})`
                 : ""

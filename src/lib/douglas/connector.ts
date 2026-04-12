@@ -2,8 +2,10 @@ import {
   buildDouglasSnapshot,
   resolveDouglasProductHtml,
 } from "@/lib/douglas/parser";
+import { BrowserFetchError, fetchPageWithFallbacks } from "@/lib/browser-fetch";
 import { normalizeDouglasUrl, supportsDouglasUrl } from "@/lib/douglas/url";
-import { getErrorMessage } from "@/lib/http-error";
+import { AppError, getErrorMessage } from "@/lib/http-error";
+import { failLatestAttempt } from "@/lib/scrape-attempts";
 import type {
   ResolveDouglasResult,
   ResolvedDouglasProduct,
@@ -18,18 +20,20 @@ class HtmlCaptureError extends Error {
   constructor(
     message: string,
     public readonly html: string,
+    public readonly attempts?: ScrapeAttemptDraft[],
   ) {
     super(message);
     this.name = "HtmlCaptureError";
   }
 }
 
-export class DouglasScrapeError extends Error {
+export class DouglasScrapeError extends AppError {
   constructor(
+    status: number,
     message: string,
     public readonly attempts: ScrapeAttemptDraft[],
   ) {
-    super(message);
+    super(status, message);
     this.name = "DouglasScrapeError";
   }
 }
@@ -43,68 +47,51 @@ async function parseFetchedHtml(
   };
 }
 
-async function scrapeWithHttp(canonicalUrl: string) {
-  const response = await fetch(canonicalUrl, {
-    headers: {
-      "accept":
-        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-      "accept-language": "bg-BG,bg;q=0.9,en-US;q=0.8,en;q=0.7",
-      "cache-control": "no-cache",
-      "user-agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
-    },
-    cache: "no-store",
-    redirect: "follow",
-  });
-  const html = await response.text();
-
-  if (!response.ok) {
-    throw new HtmlCaptureError(
-      `Douglas HTTP request failed with ${response.status}.`,
-      html,
-    );
-  }
+async function scrapeWithPlaywright(canonicalUrl: string) {
+  const { html, transport, attempts } = await fetchPageWithFallbacks(canonicalUrl);
 
   try {
     return {
       html,
+      transport,
+      attempts,
       ...(await parseFetchedHtml(html, canonicalUrl)),
     };
   } catch (error) {
-    throw new HtmlCaptureError(getErrorMessage(error), html);
+    throw new HtmlCaptureError(
+      getErrorMessage(error),
+      html,
+      failLatestAttempt(attempts, transport, getErrorMessage(error)),
+    );
   }
 }
 
 async function resolveDouglasProductInternal(rawUrl: string) {
   const canonicalUrl = normalizeDouglasUrl(rawUrl);
-  const attempts: ScrapeAttemptDraft[] = [];
 
   try {
-    const result = await scrapeWithHttp(canonicalUrl);
-    attempts.push({
-      extractor: "http",
-      ok: true,
-      error: null,
-    });
+    const result = await scrapeWithPlaywright(canonicalUrl);
 
     return {
       resolved: result.resolved,
-      extractor: "http" as const,
-      attempts,
+      extractor: result.transport,
+      attempts: result.attempts,
     };
   } catch (error) {
     const message = getErrorMessage(error);
+    const status = error instanceof AppError ? error.status : 502;
+    const attempts =
+      error instanceof BrowserFetchError
+        ? error.attempts
+        : error instanceof HtmlCaptureError && error.attempts
+          ? error.attempts
+          : ([{
+              extractor: "playwright",
+              ok: false,
+              error: message,
+            }] satisfies ScrapeAttemptDraft[]);
 
-    attempts.push({
-      extractor: "http",
-      ok: false,
-      error: message,
-    });
-
-    throw new DouglasScrapeError(
-      "Douglas extraction failed in HTTP mode.",
-      attempts,
-    );
+    throw new DouglasScrapeError(status, message, attempts);
   }
 }
 
@@ -125,7 +112,8 @@ export async function scrapeDouglasProduct(rawUrl: string, variantCode?: string)
       attempts: result.attempts,
     };
   } catch (error) {
-    throw new DouglasScrapeError(getErrorMessage(error), result.attempts);
+    const status = error instanceof AppError ? error.status : 502;
+    throw new DouglasScrapeError(status, getErrorMessage(error), result.attempts);
   }
 }
 

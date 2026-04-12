@@ -8,13 +8,10 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-enum RetailerSlug {
-  DOUGLAS
-}
-
 enum ExtractorKind {
   HTTP
   PLAYWRIGHT
+  ZYTE
 }
 
 enum WatchStatus {
@@ -94,7 +91,7 @@ model VerificationToken {
 
 model Retailer {
   id           String         @id @default(cuid())
-  slug         RetailerSlug   @unique
+  slug         String         @unique
   name         String
   baseUrl      String
   active       Boolean        @default(true)
@@ -117,6 +114,7 @@ model StoreProduct {
   imageUrl                  String?
   currentPrice              Decimal?
   originalPrice             Decimal?
+  discountCode              String?
   currency                  CurrencyCode     @default(EUR)
   inStock                   Boolean?
   lastCheckedAt             DateTime?
@@ -158,7 +156,7 @@ model PriceSnapshot {
   price                    Decimal
   originalPrice            Decimal?
   currency                 CurrencyCode   @default(EUR)
-  inStock                  Boolean
+  inStock                  Boolean?
   extractor                ExtractorKind
   scrapedAt                DateTime
 

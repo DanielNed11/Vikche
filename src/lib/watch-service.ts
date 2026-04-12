@@ -4,18 +4,16 @@ import {
   NotificationChannel as PrismaNotificationChannel,
   NotificationStatus as PrismaNotificationStatus,
   Prisma,
-  RetailerSlug,
   WatchStatus as PrismaWatchStatus,
 } from "@prisma/client";
 
 import {
   DouglasScrapeError,
-  resolveDouglasProduct,
-  scrapeDouglasProduct,
 } from "@/lib/douglas/connector";
-import { normalizeDouglasUrl } from "@/lib/douglas/url";
+import { GenericScrapeError } from "@/lib/generic/connector";
 import { AppError, getErrorMessage } from "@/lib/http-error";
 import { deliverNotification } from "@/lib/notifier";
+import { resolveProduct, scrapeProduct } from "@/lib/product-connector";
 import { prisma } from "@/lib/prisma";
 import type {
   CreateWatchResult,
@@ -26,7 +24,7 @@ import type {
   NotificationRecord,
   NotificationStatus,
   PriceSnapshotRecord,
-  ResolvedDouglasProduct,
+  ResolvedProduct,
   Retailer,
   ScrapeAttemptDraft,
   ScrapeAttemptRecord,
@@ -36,8 +34,9 @@ import type {
   WatchView,
 } from "@/lib/types";
 
-const DUE_INTERVAL_MS = 24 * 60 * 60 * 1000;
-const SCRAPE_ATTEMPT_LIMIT = 20;
+const DUE_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+const SCRAPE_ATTEMPT_LIMIT = 6;
+let retailerBackfillPromise: Promise<void> | null = null;
 
 const WATCH_VIEW_INCLUDE = Prisma.validator<Prisma.ProductWatchDefaultArgs>()({
   include: {
@@ -91,7 +90,15 @@ const NOTIFICATION_INCLUDE = Prisma.validator<Prisma.NotificationDefaultArgs>()(
 type ProductWatchWithRelations = Prisma.ProductWatchGetPayload<typeof WATCH_VIEW_INCLUDE>;
 type NotificationWithRelations = Prisma.NotificationGetPayload<typeof NOTIFICATION_INCLUDE>;
 
-function isDue(lastCheckedAt: string | null, now = Date.now()) {
+function isDue(
+  lastCheckedAt: string | null,
+  lastStatus: WatchStatus,
+  now = Date.now(),
+) {
+  if (lastStatus === "error") {
+    return false;
+  }
+
   if (!lastCheckedAt) {
     return true;
   }
@@ -111,8 +118,8 @@ function toNumber(value: Prisma.Decimal) {
   return value.toNumber();
 }
 
-function mapRetailer(slug: RetailerSlug): Retailer {
-  return slug.toLowerCase() as Retailer;
+function mapRetailer(slug: string): Retailer {
+  return slug.toLowerCase();
 }
 
 function mapExtractor(value: PrismaExtractorKind | null): ExtractorKind | null {
@@ -124,9 +131,14 @@ function mapExtractor(value: PrismaExtractorKind | null): ExtractorKind | null {
 }
 
 function mapExtractorToPrisma(value: ExtractorKind): PrismaExtractorKind {
-  return value === "http"
-    ? PrismaExtractorKind.HTTP
-    : PrismaExtractorKind.PLAYWRIGHT;
+  switch (value) {
+    case "http":
+      return PrismaExtractorKind.HTTP;
+    case "playwright":
+      return PrismaExtractorKind.PLAYWRIGHT;
+    case "zyte":
+      return PrismaExtractorKind.ZYTE;
+  }
 }
 
 function mapWatchStatus(value: PrismaWatchStatus): WatchStatus {
@@ -177,6 +189,121 @@ function mapNotificationStatusToPrisma(
     case "failed":
       return PrismaNotificationStatus.FAILED;
   }
+}
+
+function normalizeRetailerSlug(value: string) {
+  return value.trim().toLowerCase().replace(/^www\./, "");
+}
+
+function retailerIdentityForUrl(url: string) {
+  const parsed = new URL(url);
+  const slug = normalizeRetailerSlug(parsed.hostname);
+
+  return {
+    slug,
+    name: slug === "douglas.bg" ? "Douglas" : slug,
+    baseUrl: parsed.origin,
+  };
+}
+
+async function ensureRetailer(identity: {
+  slug: string;
+  name: string;
+  baseUrl: string;
+}) {
+  return prisma.retailer.upsert({
+    where: {
+      slug: identity.slug,
+    },
+    update: {
+      name: identity.name,
+      baseUrl: identity.baseUrl,
+      active: true,
+    },
+    create: {
+      slug: identity.slug,
+      name: identity.name,
+      baseUrl: identity.baseUrl,
+      active: true,
+    },
+  });
+}
+
+async function doRetailerBackfill() {
+  const storeProducts = await prisma.storeProduct.findMany({
+    select: {
+      id: true,
+      retailerId: true,
+      canonicalUrl: true,
+    },
+  });
+
+  if (storeProducts.length === 0) {
+    return;
+  }
+
+  const identities = new Map<string, ReturnType<typeof retailerIdentityForUrl>>();
+
+  for (const storeProduct of storeProducts) {
+    try {
+      const identity = retailerIdentityForUrl(storeProduct.canonicalUrl);
+      identities.set(identity.slug, identity);
+    } catch {
+      // ignore malformed legacy URLs during backfill
+    }
+  }
+
+  if (identities.size === 0) {
+    return;
+  }
+
+  for (const identity of identities.values()) {
+    await ensureRetailer(identity);
+  }
+
+  const retailers = await prisma.retailer.findMany({
+    select: {
+      id: true,
+      slug: true,
+    },
+  });
+  const retailerIdBySlug = new Map(
+    retailers.map((retailer) => [normalizeRetailerSlug(retailer.slug), retailer.id]),
+  );
+
+  for (const storeProduct of storeProducts) {
+    try {
+      const targetRetailerId = retailerIdBySlug.get(
+        retailerIdentityForUrl(storeProduct.canonicalUrl).slug,
+      );
+
+      if (!targetRetailerId || targetRetailerId === storeProduct.retailerId) {
+        continue;
+      }
+
+      await prisma.storeProduct.update({
+        where: {
+          id: storeProduct.id,
+        },
+        data: {
+          retailerId: targetRetailerId,
+        },
+      });
+    } catch {
+      // leave unreadable legacy rows untouched
+    }
+  }
+}
+
+async function ensureRetailerBackfill() {
+  if (!retailerBackfillPromise) {
+    retailerBackfillPromise = doRetailerBackfill().catch((error) => {
+      retailerBackfillPromise = null;
+      throw error;
+    });
+  }
+
+  await retailerBackfillPromise;
 }
 
 function formatNotificationSubject(
@@ -299,6 +426,7 @@ function buildWatchView(watch: ProductWatchWithRelations): WatchView {
     variantLabel: watch.storeProduct.variantLabel,
     currentPrice: toNullableNumber(watch.storeProduct.currentPrice),
     originalPrice: toNullableNumber(watch.storeProduct.originalPrice),
+    discountCode: watch.storeProduct.discountCode,
     currency: "EUR",
     inStock: watch.storeProduct.inStock,
     imageUrl: watch.storeProduct.imageUrl,
@@ -324,25 +452,6 @@ function buildWatchView(watch: ProductWatchWithRelations): WatchView {
   };
 }
 
-async function ensureDouglasRetailer() {
-  return prisma.retailer.upsert({
-    where: {
-      slug: RetailerSlug.DOUGLAS,
-    },
-    update: {
-      name: "Douglas",
-      baseUrl: "https://douglas.bg",
-      active: true,
-    },
-    create: {
-      slug: RetailerSlug.DOUGLAS,
-      name: "Douglas",
-      baseUrl: "https://douglas.bg",
-      active: true,
-    },
-  });
-}
-
 async function getWatchViewOrThrow(id: string, userId: string) {
   const watch = await prisma.productWatch.findFirst({
     where: {
@@ -360,7 +469,7 @@ async function getWatchViewOrThrow(id: string, userId: string) {
 }
 
 function buildSeedProduct(
-  resolved: ResolvedDouglasProduct,
+  resolved: ResolvedProduct,
   variantCode?: string,
 ) {
   if (resolved.kind === "simple") {
@@ -371,6 +480,7 @@ function buildSeedProduct(
       variantLabel: resolved.variantLabel,
       currentPrice: resolved.price,
       originalPrice: resolved.originalPrice,
+      discountCode: resolved.discountCode,
       inStock: resolved.inStock,
       imageUrl: resolved.imageUrl,
       variantText: resolved.variantText,
@@ -393,6 +503,7 @@ function buildSeedProduct(
     variantLabel: variant.variantLabel,
     currentPrice: variant.price,
     originalPrice: variant.originalPrice,
+    discountCode: resolved.discountCode,
     inStock: variant.inStock,
     imageUrl: variant.imageUrl ?? resolved.imageUrl,
     variantText: variant.variantText,
@@ -458,7 +569,6 @@ async function finalizeNotification(notificationId: string) {
   const result = await deliverNotification(notificationRecord, {
     title: notification.productWatch.storeProduct.title,
     canonicalUrl: notification.productWatch.storeProduct.canonicalUrl,
-    recipientEmail: notification.productWatch.user.email,
   });
 
   await prisma.$transaction([
@@ -485,6 +595,8 @@ async function finalizeNotification(notificationId: string) {
 }
 
 async function refreshStoreProductInternal(storeProductId: string) {
+  await ensureRetailerBackfill();
+
   const storeProduct = await prisma.storeProduct.findUnique({
     where: {
       id: storeProductId,
@@ -509,12 +621,8 @@ async function refreshStoreProductInternal(storeProductId: string) {
     throw new AppError(404, "Продуктът не е намерен.");
   }
 
-  if (storeProduct.retailer.slug !== RetailerSlug.DOUGLAS) {
-    throw new AppError(400, "Този магазин още не се поддържа.");
-  }
-
   try {
-    const result = await scrapeDouglasProduct(
+    const result = await scrapeProduct(
       storeProduct.canonicalUrl,
       storeProduct.externalProductCode,
     );
@@ -549,6 +657,7 @@ async function refreshStoreProductInternal(storeProductId: string) {
           variantLabel: result.snapshot.variantLabel,
           currentPrice: result.snapshot.price,
           originalPrice: result.snapshot.originalPrice,
+          discountCode: result.snapshot.discountCode,
           currency: CurrencyCode.EUR,
           inStock: result.snapshot.inStock,
           imageUrl: result.snapshot.imageUrl,
@@ -594,7 +703,10 @@ async function refreshStoreProductInternal(storeProductId: string) {
       error: null,
     };
   } catch (error) {
-    const attempts = error instanceof DouglasScrapeError ? error.attempts : [];
+    const attempts =
+      error instanceof DouglasScrapeError || error instanceof GenericScrapeError
+        ? error.attempts
+        : [];
     await persistAttempts(storeProductId, attempts);
 
     await prisma.storeProduct.update({
@@ -638,6 +750,8 @@ async function refreshWatchInternal(id: string, userId: string): Promise<WatchMu
 }
 
 export async function getDashboardData(userId: string): Promise<DashboardData> {
+  await ensureRetailerBackfill();
+
   const watches = await prisma.productWatch.findMany({
     where: {
       userId,
@@ -679,7 +793,7 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
     stats: {
       watchCount: watchViews.length,
       inStockCount: watchViews.filter((watch) => watch.inStock).length,
-      dueCount: watchViews.filter((watch) => isDue(watch.lastCheckedAt, now)).length,
+      dueCount: watchViews.filter((watch) => isDue(watch.lastCheckedAt, watch.lastStatus, now)).length,
       priceDropCount,
     },
     recentNotifications: recentNotifications.map((notification) =>
@@ -697,12 +811,13 @@ export async function createWatch(
   url: string,
   variantCode?: string,
 ): Promise<CreateWatchResult> {
-  const retailer = await ensureDouglasRetailer();
-  const canonicalUrl = normalizeDouglasUrl(url);
-  const { resolved } = await resolveDouglasProduct(canonicalUrl);
+  await ensureRetailerBackfill();
+  const { resolved } = await resolveProduct(url);
+  const retailer = await ensureRetailer(retailerIdentityForUrl(resolved.canonicalUrl));
+  const canonicalUrl = resolved.canonicalUrl;
 
   if (resolved.kind === "configurable" && !variantCode) {
-    throw new AppError(400, "Избери нюанс, преди да запазиш продукта.");
+    throw new AppError(400, "Избери вариант, преди да запазиш продукта.");
   }
 
   const seedProduct = buildSeedProduct(resolved, variantCode);
@@ -721,6 +836,7 @@ export async function createWatch(
       variantLabel: seedProduct.variantLabel,
       currentPrice: seedProduct.currentPrice,
       originalPrice: seedProduct.originalPrice,
+      discountCode: seedProduct.discountCode,
       currency: CurrencyCode.EUR,
       inStock: seedProduct.inStock,
       imageUrl: seedProduct.imageUrl,
@@ -736,6 +852,7 @@ export async function createWatch(
       variantLabel: seedProduct.variantLabel,
       currentPrice: seedProduct.currentPrice,
       originalPrice: seedProduct.originalPrice,
+      discountCode: seedProduct.discountCode,
       currency: CurrencyCode.EUR,
       inStock: seedProduct.inStock,
       imageUrl: seedProduct.imageUrl,
@@ -779,12 +896,56 @@ export async function refreshWatch(userId: string, id: string) {
   return refreshWatchInternal(id, userId);
 }
 
+export async function deleteWatch(userId: string, id: string) {
+  const watch = await prisma.productWatch.findFirst({
+    where: {
+      id,
+      userId,
+    },
+    select: {
+      id: true,
+      storeProductId: true,
+    },
+  });
+
+  if (!watch) {
+    throw new AppError(404, "Продуктът не е намерен.");
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.productWatch.delete({
+      where: {
+        id: watch.id,
+      },
+    });
+
+    const remainingWatchCount = await tx.productWatch.count({
+      where: {
+        storeProductId: watch.storeProductId,
+      },
+    });
+
+    if (remainingWatchCount === 0) {
+      await tx.storeProduct.delete({
+        where: {
+          id: watch.storeProductId,
+        },
+      });
+    }
+  });
+}
+
 export async function runDueChecks(): Promise<DueCheckResult> {
+  await ensureRetailerBackfill();
+
   const dueThreshold = new Date(Date.now() - DUE_INTERVAL_MS);
   const dueProducts = await prisma.storeProduct.findMany({
     where: {
       productWatches: {
         some: {},
+      },
+      lastStatus: {
+        not: PrismaWatchStatus.ERROR,
       },
       OR: [
         {

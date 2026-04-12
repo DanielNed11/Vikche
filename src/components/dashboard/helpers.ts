@@ -11,6 +11,18 @@ export function formatPrice(price: number | null) {
   }).format(price);
 }
 
+export function normalizeProductImageUrl(imageUrl: string | null) {
+  if (!imageUrl) {
+    return null;
+  }
+
+  try {
+    return new URL(imageUrl, "https://douglas.bg/").toString();
+  } catch {
+    return null;
+  }
+}
+
 export function formatDate(date: string | null) {
   if (!date) {
     return "Още не е проверяван";
@@ -28,12 +40,16 @@ export function statusTone(watch: WatchView) {
     return "bg-danger/10 text-danger";
   }
 
-  if (watch.inStock === false) {
-    return "bg-warning/10 text-warning";
-  }
-
   if (watch.lastStatus === "pending") {
     return "bg-accent/8 text-accent-strong";
+  }
+
+  if (watch.inStock === null) {
+    return "bg-white text-muted";
+  }
+
+  if (watch.inStock === false) {
+    return "bg-warning/10 text-warning";
   }
 
   return "bg-accent-soft text-accent-strong";
@@ -41,30 +57,42 @@ export function statusTone(watch: WatchView) {
 
 export function statusLabel(watch: WatchView) {
   if (watch.lastStatus === "error") {
-    return "Ще опитаме отново";
+    return "Нужна е нова проверка";
   }
 
   if (watch.lastStatus === "pending") {
-    return "Проверяваме";
+    return "Очакваме цена";
+  }
+
+  if (watch.inStock === null) {
+    return "Наличността се уточнява";
   }
 
   if (watch.inStock === false) {
     return "Няма наличност";
   }
 
-  return "Следим цената";
+  return "Наличен";
 }
 
 export function statusMessage(watch: WatchView) {
   if (watch.lastStatus === "error") {
-    return "Последната проверка не успя, но Vikche ще опита отново автоматично.";
+    return "Цената не можа да се обнови в момента.";
+  }
+
+  if (watch.lastStatus === "pending") {
+    return "Скоро ще видиш първата цена тук.";
+  }
+
+  if (watch.inStock === null) {
+    return "Все още не успяхме да потвърдим наличността.";
   }
 
   if (watch.inStock === false) {
-    return "Продуктът в момента не е наличен в Douglas.";
+    return "В момента този вариант не е наличен.";
   }
 
-  return "Ще видиш нова цена тук веднага щом Douglas я промени.";
+  return "Ще покажем промяна веднага щом има по-добра оферта.";
 }
 
 export function latestNotificationFor(
@@ -91,6 +119,7 @@ export type WatchGroup = {
   lowestPrice: number | null;
   latestNotification: NotificationRecord | null;
   inStockCount: number;
+  unknownStockCount: number;
 };
 
 function compareVariantWatches(left: WatchView, right: WatchView) {
@@ -119,7 +148,8 @@ export function buildWatchGroups(watches: WatchView[]) {
         watches: [watch],
         lowestPrice: watch.currentPrice,
         latestNotification: latestNotificationFor(watch.notifications),
-        inStockCount: watch.inStock ? 1 : 0,
+        inStockCount: watch.inStock === true ? 1 : 0,
+        unknownStockCount: watch.inStock === null ? 1 : 0,
       });
       continue;
     }
@@ -127,7 +157,8 @@ export function buildWatchGroups(watches: WatchView[]) {
     existing.watches.push(watch);
     existing.imageUrl ||= watch.imageUrl;
     existing.title ||= watch.title;
-    existing.inStockCount += watch.inStock ? 1 : 0;
+    existing.inStockCount += watch.inStock === true ? 1 : 0;
+    existing.unknownStockCount += watch.inStock === null ? 1 : 0;
 
     if (
       watch.currentPrice !== null &&
@@ -158,13 +189,7 @@ export function variantLabelFor(watch: WatchView) {
 }
 
 export function variantMetaFor(watch: WatchView) {
-  const parts = [`Код ${watch.productCode ?? "Неизвестен"}`];
-
-  if (watch.variantText) {
-    parts.push(watch.variantText);
-  }
-
-  return parts.join(" · ");
+  return watch.variantText ?? null;
 }
 
 export function variantCountLabel(count: number) {

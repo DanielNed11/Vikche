@@ -1,8 +1,7 @@
 import { PrismaAdapter } from "@next-auth/prisma-adapter";
 import type { NextAuthOptions } from "next-auth";
 import { getServerSession } from "next-auth";
-import AppleProvider from "next-auth/providers/apple";
-import GoogleProvider from "next-auth/providers/google";
+import CredentialsProvider from "next-auth/providers/credentials";
 
 import { prisma } from "@/lib/prisma";
 
@@ -18,31 +17,88 @@ function getEffectiveAuthSecret() {
   return getAuthSecret() || (process.env.NODE_ENV !== "production" ? "vikche-dev-secret" : "");
 }
 
-export function hasGoogleAuth() {
-  return Boolean(getEnv("GOOGLE_CLIENT_ID") && getEnv("GOOGLE_CLIENT_SECRET"));
+function normalizeEmail(value: string | null | undefined) {
+  return value?.trim().toLowerCase() ?? "";
 }
 
-export function hasAppleAuth() {
-  return Boolean(getEnv("APPLE_ID") && getEnv("APPLE_SECRET"));
+function getAllowedEmails() {
+  return new Set(
+    getEnv("AUTH_ALLOWED_EMAILS")
+      .split(",")
+      .map((entry) => normalizeEmail(entry))
+      .filter(Boolean),
+  );
+}
+
+function getFixedPassword() {
+  return getEnv("AUTH_FIXED_PASSWORD");
+}
+
+export function hasCredentialsAuth() {
+  return getAllowedEmails().size > 0 && Boolean(getFixedPassword());
+}
+
+async function authorizeCredentials(credentials: Record<string, string> | undefined) {
+  const email = normalizeEmail(credentials?.email);
+  const password = credentials?.password?.trim() ?? "";
+
+  if (!email || !password) {
+    return null;
+  }
+
+  if (!hasCredentialsAuth()) {
+    return null;
+  }
+
+  if (!getAllowedEmails().has(email) || password !== getFixedPassword()) {
+    return null;
+  }
+
+  const user = await prisma.user.upsert({
+    where: {
+      email,
+    },
+    update: {},
+    create: {
+      email,
+      name: email.split("@")[0] || email,
+    },
+  });
+
+  return {
+    id: user.id,
+    email: user.email ?? email,
+    name: user.name ?? null,
+  };
 }
 
 function getProviders() {
   const providers = [];
 
-  if (hasGoogleAuth()) {
+  if (hasCredentialsAuth()) {
     providers.push(
-      GoogleProvider({
-        clientId: getEnv("GOOGLE_CLIENT_ID"),
-        clientSecret: getEnv("GOOGLE_CLIENT_SECRET"),
-      }),
-    );
-  }
-
-  if (hasAppleAuth()) {
-    providers.push(
-      AppleProvider({
-        clientId: getEnv("APPLE_ID"),
-        clientSecret: getEnv("APPLE_SECRET"),
+      CredentialsProvider({
+        name: "Credentials",
+        credentials: {
+          email: {
+            label: "Email",
+            type: "email",
+          },
+          password: {
+            label: "Password",
+            type: "password",
+          },
+        },
+        async authorize(credentials) {
+          return authorizeCredentials(
+            credentials
+              ? {
+                  email: String(credentials.email ?? ""),
+                  password: String(credentials.password ?? ""),
+                }
+              : undefined,
+          );
+        },
       }),
     );
   }
@@ -52,13 +108,6 @@ function getProviders() {
 
 export function isAuthEnabled() {
   return getProviders().length > 0 && Boolean(getEffectiveAuthSecret());
-}
-
-export function getAuthProviderAvailability() {
-  return {
-    google: hasGoogleAuth(),
-    apple: hasAppleAuth(),
-  };
 }
 
 export const authOptions: NextAuthOptions = {

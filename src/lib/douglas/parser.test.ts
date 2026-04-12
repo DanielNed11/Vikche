@@ -77,6 +77,41 @@ test("resolveDouglasProductHtml extracts a simple EUR-priced product", () => {
   assert.equal(resolved.imageUrl, "https://douglas.bg/media/example.jpg");
 });
 
+test("resolveDouglasProductHtml prefers secure meta image and normalizes relative paths", () => {
+  const html = `
+    <html>
+      <head>
+        <meta property="og:image" content="default/SEO_Open_Graphs_AB_Tests_4_.jpg" />
+        <meta property="og:image:secure_url" content="https://douglas.bg/media/secure-example.jpg" />
+        <meta property="og:availability" content="in stock" />
+      </head>
+      <body>
+        <div class="product-view-custom-title">
+          <h1 itemprop="name">Secure Image Product</h1>
+        </div>
+        <div class="product-info-main">
+          <span class="sku-code">999001</span>
+          <div class="price-box">
+            <div class="final-price">
+              <span class="price-wrapper">
+                <span class="price">19,99 €</span>
+              </span>
+            </div>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+
+  const resolved = resolveDouglasProductHtml(
+    html,
+    "https://douglas.bg/secure-image-product-999001",
+  );
+
+  assert.equal(resolved.kind, "simple");
+  assert.equal(resolved.imageUrl, "https://douglas.bg/media/secure-example.jpg");
+});
+
 test("resolveDouglasProductHtml detects out-of-stock simple products", () => {
   const html = `
     <html>
@@ -110,6 +145,111 @@ test("resolveDouglasProductHtml detects out-of-stock simple products", () => {
   assert.equal(resolved.kind, "simple");
   assert.equal(resolved.inStock, false);
   assert.equal(resolved.price, 24.99);
+});
+
+test("resolveDouglasProductHtml prefers Douglas promo-code price for simple products", () => {
+  const html = `
+    <html>
+      <head>
+        <meta property="og:image" content="https://douglas.bg/media/example.jpg" />
+        <meta property="og:availability" content="in stock" />
+      </head>
+      <body>
+        <div class="product-view-custom-title">
+          <h1 itemprop="name">Tangle Teezer Wet Detangler Brush</h1>
+        </div>
+        <div class="product-info-main">
+          <span class="sku-code">050732</span>
+          <div class="price-box">
+            <div class="final-price">
+              <span class="price-wrapper">
+                <span class="price">18,15 €</span>
+                <span class="side-price"> /35,50 лв.</span>
+              </span>
+            </div>
+          </div>
+          <p class="stock stock-availability">Наличен</p>
+        </div>
+        <div id="stenik-rule-discount">
+          <div class="discount-block">
+            <span class="discount-price">
+              <span class="price">14,52 €</span>
+              <span class="side-price"> /28,40 лв.</span>
+            </span>
+            <span class="discount-text">с код</span>
+            <span class="discount-code">EGG20</span>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+
+  const resolved = resolveDouglasProductHtml(
+    html,
+    "https://douglas.bg/tangle-teezer-wet-detangler-brush-50732",
+  );
+
+  assert.equal(resolved.kind, "simple");
+  assert.equal(resolved.price, 14.52);
+  assert.equal(resolved.originalPrice, 18.15);
+  assert.equal(resolved.discountCode, "EGG20");
+});
+
+test("resolveDouglasProductHtml ignores configurable function definitions on simple pages", () => {
+  const html = `
+    <html>
+      <head>
+        <meta property="og:image:secure_url" content="https://douglas.bg/media/simple.jpg" />
+        <meta property="og:availability" content="in stock" />
+      </head>
+      <body>
+        <div class="product-view-custom-title">
+          <h1 itemprop="name">YVES SAINT LAURENT Myslf</h1>
+        </div>
+        <div class="product-info-main">
+          <span class="sku-code">091138</span>
+          <div id="weight-container">150ML</div>
+          <div class="price-box">
+            <div class="final-price">
+              <span class="price-wrapper">
+                <span class="price">201,45 €</span>
+              </span>
+            </div>
+          </div>
+          <p class="stock stock-availability">Наличен</p>
+        </div>
+        <script>
+          window.component = {
+            utag_data: {
+              "primary_product_id": ["091138"],
+              "primary_product_master_id": ["091138"],
+              "primary_product_master_name": ["YVES SAINT LAURENT Myslf"],
+              "primary_product_price": ["201.45"],
+              "primary_product_price_regular": ["201.45"],
+              "primary_product_size": ["150ML"],
+              "primary_product_availability_status": ["Available"]
+            }
+          };
+        </script>
+        <script>
+          function initConfigurableOptions(productId, optionConfig) {
+            return { productId, optionConfig };
+          }
+        </script>
+      </body>
+    </html>
+  `;
+
+  const resolved = resolveDouglasProductHtml(
+    html,
+    "https://douglas.bg/yves-saint-laurent-myslf-91138",
+  );
+
+  assert.equal(resolved.kind, "simple");
+  assert.equal(resolved.productCode, "091138");
+  assert.equal(resolved.price, 201.45);
+  assert.equal(resolved.inStock, true);
+  assert.equal(resolved.variantText, "150ML");
 });
 
 test("resolveDouglasProductHtml returns configurable variants and builds exact snapshots", () => {

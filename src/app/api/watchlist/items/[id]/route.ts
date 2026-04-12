@@ -1,17 +1,21 @@
+import { deleteWatch } from "@/lib/watch-service";
 import { AppError, getErrorMessage } from "@/lib/http-error";
-import { resolveProduct } from "@/lib/product-connector";
 import { requireViewer } from "@/lib/viewer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(request: Request) {
+export async function DELETE(
+  _request: Request,
+  context: RouteContext<"/api/watchlist/items/[id]">,
+) {
   try {
-    await requireViewer();
-    const body = (await request.json()) as { url?: string };
-    const result = await resolveProduct(body.url ?? "");
+    const viewer = await requireViewer();
+    const { id } = await context.params;
 
-    return Response.json(result);
+    await deleteWatch(viewer.id, id);
+
+    return Response.json({ ok: true });
   } catch (error) {
     const status = error instanceof AppError ? error.status : 500;
 

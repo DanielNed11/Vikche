@@ -11,10 +11,8 @@ import {
   variantLabelFor,
   variantMetaFor,
 } from "./helpers";
-import { LoadingLabel } from "./loading";
-
 export function ProductShades({ watches }: { watches: WatchView[] }) {
-  const { isPending, handleRefresh } = useDashboard();
+  const { isPending, isBusy, handleRefresh, handleRemove } = useDashboard();
 
   return (
     <div className="space-y-3">
@@ -38,13 +36,20 @@ export function ProductShades({ watches }: { watches: WatchView[] }) {
                 <h4 className="mt-3 text-lg font-semibold text-accent-strong">
                   {variantLabelFor(watch)}
                 </h4>
-                <p className="mt-1 text-sm text-muted">
-                  {variantMetaFor(watch)}
-                </p>
+                {variantMetaFor(watch) ? (
+                  <p className="mt-1 text-sm text-muted">
+                    {variantMetaFor(watch)}
+                  </p>
+                ) : null}
                 {latestNotification ? (
                   <p className="mt-3 text-sm leading-6 text-accent-strong">
                     Намаление: {formatPrice(latestNotification.previousPrice)} →{" "}
                     {formatPrice(latestNotification.currentPrice)}
+                  </p>
+                ) : null}
+                {watch.discountCode ? (
+                  <p className="mt-2 text-sm leading-6 text-accent-strong">
+                    Код за отстъпка: <span className="font-semibold">{watch.discountCode}</span>
                   </p>
                 ) : null}
                 <p className="mt-2 text-sm leading-6 text-muted">
@@ -70,40 +75,22 @@ export function ProductShades({ watches }: { watches: WatchView[] }) {
               </div>
             </div>
 
-            <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-              {watch.history.length === 0 ? (
-                <p className="text-sm leading-6 text-muted">
-                  Все още няма записани цени.
-                </p>
-              ) : (
-                <div className="flex gap-2 overflow-x-auto pb-1">
-                  {watch.history.slice(0, 3).map((snapshot) => (
-                    <div
-                      key={snapshot.id}
-                      className="min-w-[9.5rem] shrink-0 rounded-[20px] bg-white px-3 py-3 shadow-[0_8px_24px_rgba(138,45,86,0.06)]"
-                    >
-                      <p className="text-sm font-semibold text-accent-strong">
-                        {formatPrice(snapshot.price)}
-                      </p>
-                      <p className="mt-1 text-xs text-muted">
-                        {snapshot.inStock ? "Наличен" : "Няма наличност"}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              )}
-
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
               <button
                 type="button"
                 onClick={() => handleRefresh(watch.id)}
-                disabled={isPending}
+                disabled={isPending || isBusy}
                 className="min-h-12 w-full rounded-full border border-white/80 bg-white px-4 py-3 text-sm font-semibold text-accent-strong transition hover:border-accent/45 hover:bg-[#fff8fb] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
               >
-                <LoadingLabel
-                  isPending={isPending}
-                  idle="Обнови нюанса"
-                  loading="Обновяване..."
-                />
+                Обнови
+              </button>
+              <button
+                type="button"
+                onClick={() => handleRemove(watch.id)}
+                disabled={isPending || isBusy}
+                className="min-h-12 w-full rounded-full border border-white/80 bg-white px-4 py-3 text-sm font-semibold text-accent-strong transition hover:border-danger/45 hover:bg-[#fff8fb] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+              >
+                Премахни
               </button>
             </div>
           </div>

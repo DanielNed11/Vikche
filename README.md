@@ -1,10 +1,10 @@
 # Vikche
 
-Vikche is a Douglas-first price tracker built as a Next.js web app. It accepts `douglas.bg` product URLs, stores tracked items in PostgreSQL through Prisma, uses an HTTP scraper for Douglas, keeps price history, and logs or emails price-drop notifications.
+Vikche is a product price tracker built as a Next.js web app. It accepts product URLs, stores tracked items in PostgreSQL through Prisma, uses Playwright-based scraping plus OpenAI-assisted generic extraction, keeps price history, and logs or emails price-drop notifications.
 
 ## What is implemented
 - Douglas connector with URL validation and canonicalization
-- HTTP scraping for Douglas product pages
+- Playwright scraping with generic multi-store fallback
 - Prisma/PostgreSQL persistence with multi-store-ready core tables:
   - `Retailer`
   - `StoreProduct`
@@ -12,11 +12,10 @@ Vikche is a Douglas-first price tracker built as a Next.js web app. It accepts `
   - `PriceSnapshot`
   - `ScrapeAttempt`
   - `Notification`
-- Google SSO with NextAuth and Prisma-backed users
-- Apple sign-in path ready behind env configuration
-- API routes to create/list watches, refresh a single watch, and run due daily checks
-- Mobile-first dashboard UI for adding products, choosing Douglas shades, and viewing price history
-- Daily worker route ready for Vercel Cron Jobs
+- Private credentials-based auth with NextAuth, email allowlist, and one fixed password
+- API routes to create/list watches, refresh a single watch, and run due weekly checks
+- Mobile-first dashboard UI for adding products, choosing variants, and viewing price history
+- Scheduled worker route ready for Vercel Cron Jobs
 - Parser tests for the Douglas HTML extraction logic
 
 ## Local setup
@@ -61,12 +60,12 @@ Required:
 - `DATABASE_URL`
 - `DIRECT_URL`
 
-Recommended for SSO:
+Required for private sign-in:
 
 - `NEXTAUTH_URL`
 - `NEXTAUTH_SECRET`
-- `GOOGLE_CLIENT_ID`
-- `GOOGLE_CLIENT_SECRET`
+- `AUTH_ALLOWED_EMAILS`
+- `AUTH_FIXED_PASSWORD`
 
 Optional:
 
@@ -74,25 +73,39 @@ Optional:
 - `RESEND_API_KEY`
 - `VIKCHE_ALERT_FROM`
 - `VIKCHE_ALERT_TO`
-- `APPLE_ID`
-- `APPLE_SECRET`
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL`
+- `ZYTE_API_KEY`
+- `ZYTE_DOMAINS`
 
 If no Resend credentials are configured, notifications are still created and marked as `logged`.
-If Google OAuth is not configured, Vikche still requires sign-in, and no local fallback login is available.
+Vikche uses an allowlisted email list plus one fixed password from env for private access.
 
 ## Scraping
 
-Vikche currently uses the HTTP Douglas extractor only. If a retailer later needs browser automation, that can be added back as a separate deployment decision.
+Vikche uses Playwright for page fetching across stores. Generic stores are interpreted through OpenAI after the HTML is fetched.
+
+For stores that block direct browser fetching, Vikche can retry through Zyte when these variables are configured:
+
+- `ZYTE_API_KEY`
+- `ZYTE_DOMAINS`
+
+`ZYTE_DOMAINS` accepts a comma-separated list of hostnames or base domains that should use the Zyte fallback after a direct blocked response, for example:
+
+```env
+ZYTE_DOMAINS=zara.com,stradivarius.com,hm.com,jdsports.bg,notino.bg
+```
 
 ## Worker
 
-Run due daily checks manually:
+Run due weekly checks manually:
 
 ```bash
 npm run worker:due
 ```
 
-This refreshes store products whose last successful check is older than 24 hours.
+This refreshes store products whose last successful check is older than 7 days.
+Products stuck in an error state are skipped by the automatic cron and can be retried manually from the UI.
 
 ## Vercel + Neon deployment
 
@@ -133,8 +146,8 @@ Set these environment variables in Vercel:
 - `DIRECT_URL`
 - `NEXTAUTH_URL`
 - `NEXTAUTH_SECRET`
-- `GOOGLE_CLIENT_ID`
-- `GOOGLE_CLIENT_SECRET`
+- `AUTH_ALLOWED_EMAILS`
+- `AUTH_FIXED_PASSWORD`
 - `CRON_SECRET`
 - `RESEND_API_KEY` if you want email delivery
 - `VIKCHE_ALERT_FROM` if you want email delivery
@@ -145,18 +158,18 @@ For `NEXTAUTH_URL`, use your production domain, for example:
 NEXTAUTH_URL="https://vikche.vercel.app"
 ```
 
-### 4. Update Google OAuth
+### 4. Private access setup
 
-Add your production callback URL in Google Cloud:
+Set `AUTH_ALLOWED_EMAILS` to a comma-separated allowlist, for example:
 
-```text
-https://YOUR_DOMAIN/api/auth/callback/google
+```env
+AUTH_ALLOWED_EMAILS="you@example.com,friend@example.com"
 ```
 
-If you keep local development, also keep:
+Set one fixed shared password:
 
-```text
-http://localhost:3000/api/auth/callback/google
+```env
+AUTH_FIXED_PASSWORD="choose-a-strong-password"
 ```
 
 ### 5. Cron schedule
@@ -166,7 +179,22 @@ The repo includes [vercel.json](/Users/daniel/vikche/vercel.json), which schedul
 - `/api/admin/run-due-checks`
 - once per day at `08:00 UTC`
 
+The cron still runs daily, but it only refreshes products that are due for their weekly check.
+
 The route accepts `GET` so Vercel Cron can trigger it, and it checks `CRON_SECRET` when that variable is configured.
+
+### 6. Test email delivery
+
+When `RESEND_API_KEY` and `VIKCHE_ALERT_FROM` are configured, you can send a manual test email through:
+
+```bash
+curl -X POST http://localhost:3000/api/admin/test-email \
+  -H "Authorization: Bearer $CRON_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+This route always sends to `VIKCHE_ALERT_TO`.
 
 ## Tests
 

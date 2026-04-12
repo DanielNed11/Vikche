@@ -1,5 +1,8 @@
-export type Retailer = "douglas";
-export type ExtractorKind = "http" | "playwright";
+export type Retailer = string;
+export type ExtractorKind =
+  | "http"
+  | "playwright"
+  | "zyte";
 export type WatchStatus = "pending" | "ok" | "error";
 export type NotificationChannel = "email" | "log";
 export type NotificationStatus = "queued" | "sent" | "logged" | "failed";
@@ -16,6 +19,7 @@ export interface WatchRecord {
   variantLabel: string | null;
   currentPrice: number | null;
   originalPrice: number | null;
+  discountCode: string | null;
   currency: "EUR";
   inStock: boolean | null;
   imageUrl: string | null;
@@ -35,7 +39,7 @@ export interface PriceSnapshotRecord {
   price: number;
   originalPrice: number | null;
   currency: "EUR";
-  inStock: boolean;
+  inStock: boolean | null;
   extractor: ExtractorKind;
   scrapedAt: string;
 }
@@ -73,8 +77,9 @@ export interface ScrapedProductSnapshot {
   variantLabel: string | null;
   price: number;
   originalPrice: number | null;
+  discountCode: string | null;
   currency: "EUR";
-  inStock: boolean;
+  inStock: boolean | null;
   imageUrl: string | null;
   variantText: string | null;
   extractor: ExtractorKind;
@@ -103,8 +108,9 @@ export interface ResolvedSimpleProduct {
   variantLabel: null;
   price: number;
   originalPrice: number | null;
+  discountCode: string | null;
   currency: "EUR";
-  inStock: boolean;
+  inStock: boolean | null;
   imageUrl: string | null;
   variantText: string | null;
 }
@@ -116,18 +122,23 @@ export interface ResolvedConfigurableProduct {
   productUrl: string;
   title: string;
   masterProductCode: string;
+  discountCode: string | null;
   imageUrl: string | null;
   defaultVariantCode: string | null;
   variants: ResolvedVariantChoice[];
 }
 
-export type ResolvedDouglasProduct =
+export type ResolvedProduct =
   | ResolvedSimpleProduct
   | ResolvedConfigurableProduct;
 
-export interface ResolveDouglasResult {
-  resolved: ResolvedDouglasProduct;
+export type ResolvedDouglasProduct = ResolvedProduct;
+
+export interface ResolveProductResult {
+  resolved: ResolvedProduct;
 }
+
+export type ResolveDouglasResult = ResolveProductResult;
 
 export interface ScrapeAttemptDraft {
   extractor: ExtractorKind;

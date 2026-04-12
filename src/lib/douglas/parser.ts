@@ -1,7 +1,9 @@
 import { load } from "cheerio";
 
+import { extractDiscountCodeFromText } from "@/lib/discount-code";
 import { AppError } from "@/lib/http-error";
 import type {
+  ExtractorKind,
   ResolvedConfigurableProduct,
   ResolvedDouglasProduct,
   ResolvedVariantChoice,
@@ -63,6 +65,32 @@ function normalizeText(value: string | undefined | null) {
   return value?.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim() ?? "";
 }
 
+function normalizeDouglasImageUrl(value: string | undefined | null) {
+  const normalized = normalizeText(value);
+
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    return new URL(normalized, "https://douglas.bg/").toString();
+  } catch {
+    return null;
+  }
+}
+
+function getMetaImage($: ReturnType<typeof load>) {
+  return (
+    normalizeDouglasImageUrl($("meta[property='og:image:secure_url']").attr("content")) ??
+    normalizeDouglasImageUrl($("meta[property='og:image:url']").attr("content")) ??
+    normalizeDouglasImageUrl($("meta[property='og:image']").attr("content"))
+  );
+}
+
+function getDouglasRetailerSlug(canonicalUrl: string) {
+  return new URL(canonicalUrl).hostname.replace(/^www\./, "").toLowerCase();
+}
+
 function firstText(values: unknown): string | null {
   if (typeof values === "string") {
     const normalized = normalizeText(values);
@@ -122,6 +150,7 @@ function parseAvailability(value: string | null) {
 
   if (
     normalized.includes("out of stock") ||
+    normalized.includes("outofstock") ||
     normalized.includes("няма наличност") ||
     normalized.includes("not available")
   ) {
@@ -130,6 +159,7 @@ function parseAvailability(value: string | null) {
 
   if (
     normalized.includes("in stock") ||
+    normalized.includes("instock") ||
     normalized.includes("available") ||
     normalized.includes("в наличност") ||
     normalized.includes("наличен")
@@ -242,15 +272,60 @@ function getVisibleVariantText($: ReturnType<typeof load>) {
   );
 }
 
+function getPromoCodeOffer($: ReturnType<typeof load>) {
+  const promoPrice =
+    parseDisplayedEuro($("#stenik-rule-discount .discount-price").first().text()) ??
+    parseDisplayedEuro($(".discount-block .discount-price").first().text());
+  const discountCode =
+    normalizeText($("#stenik-rule-discount .discount-code").first().text()) ||
+    normalizeText($(".discount-block .discount-code").first().text()) ||
+    normalizeText($(".discount-block [data-promo-code]").first().attr("data-promo-code"));
+  const discountLabel =
+    normalizeText($("#stenik-rule-discount .discount-text").first().text()) ||
+    normalizeText($(".discount-block .discount-text").first().text());
+
+  if (promoPrice === null) {
+    return null;
+  }
+
+  if (!discountCode && !discountLabel.toLowerCase().includes("код")) {
+    return null;
+  }
+
+  return {
+    price: promoPrice,
+    code: discountCode || null,
+  };
+}
+
 function getVisibilityPayload(html: string) {
   return extractJsonAfterMarker<DouglasUtagPayload>(html, "utag_data:");
 }
 
 function getConfigurablePayload(html: string) {
-  return extractJsonAfterMarker<ConfigurableOptionConfig>(
-    html,
-    "initConfigurableOptions(",
+  const invocationMatch = html.match(
+    /initConfigurableOptions\(\s*(?:"[^"]+"|'[^']+'|\d+)\s*,/m,
   );
+
+  if (!invocationMatch || invocationMatch.index === undefined) {
+    return null;
+  }
+
+  const startIndex = findJsonObjectStart(
+    html,
+    invocationMatch.index + invocationMatch[0].length,
+  );
+
+  if (startIndex === -1) {
+    return null;
+  }
+
+  try {
+    const json = extractBalancedJsonObject(html, startIndex);
+    return JSON.parse(json) as ConfigurableOptionConfig;
+  } catch {
+    throw new AppError(502, "Не успяхме да разчетем данните от страницата на Douglas.");
+  }
 }
 
 function getPriceFromOption(config: ConfigurableOptionConfig, productId: string) {
@@ -383,6 +458,9 @@ function resolveSimpleProduct(
   utagData: DouglasUtagPayload | null,
 ): ResolvedDouglasProduct {
   const title = getTitle($) || firstText(utagData?.primary_product_master_name);
+  const promoCodeOffer = getPromoCodeOffer($);
+  const discountCode =
+    promoCodeOffer?.code ?? extractDiscountCodeFromText($("body").text());
   const productCode =
     firstText(utagData?.primary_product_id) ||
     normalizeText($(".product-info-main .sku-code").first().text()) ||
@@ -396,6 +474,7 @@ function resolveSimpleProduct(
     $(".product-info-main .price-box .old-price .price-wrapper .price").first().text(),
   );
   const currentPrice =
+    promoCodeOffer?.price ??
     visibleCurrentPrice ??
     parseNumericPrice(firstText(utagData?.primary_product_price)) ??
     parseNumericPrice($(".product-info-main [itemprop='price']").first().attr("content"));
@@ -409,7 +488,8 @@ function resolveSimpleProduct(
 
   const originalPrice = normalizeOldPrice(
     currentPrice,
-    visibleOriginalPrice ??
+    (promoCodeOffer ? visibleCurrentPrice : null) ??
+      visibleOriginalPrice ??
       parseNumericPrice(firstText(utagData?.primary_product_price_regular)),
   );
   const availability =
@@ -424,7 +504,7 @@ function resolveSimpleProduct(
 
   return {
     kind: "simple",
-    retailer: "douglas",
+    retailer: getDouglasRetailerSlug(canonicalUrl),
     canonicalUrl,
     productUrl: canonicalUrl,
     title,
@@ -433,10 +513,10 @@ function resolveSimpleProduct(
     variantLabel: null,
     price: currentPrice,
     originalPrice,
+    discountCode,
     currency: "EUR",
     inStock: availability,
-    imageUrl:
-      normalizeText($("meta[property='og:image']").attr("content")) || null,
+    imageUrl: getMetaImage($),
     variantText:
       getVisibleVariantText($) ?? firstText(utagData?.primary_product_size) ?? null,
   };
@@ -449,6 +529,7 @@ function resolveConfigurableProduct(
   config: ConfigurableOptionConfig,
 ): ResolvedConfigurableProduct {
   const title = getTitle($) || firstText(utagData?.primary_product_master_name);
+  const discountCode = extractDiscountCodeFromText($("body").text());
   const masterProductCode =
     firstText(utagData?.primary_product_master_id) ||
     normalizeText($(".product-info-main .sku-code").first().text());
@@ -482,15 +563,13 @@ function resolveConfigurableProduct(
 
   return {
     kind: "configurable",
-    retailer: "douglas",
+    retailer: getDouglasRetailerSlug(canonicalUrl),
     canonicalUrl,
     productUrl: canonicalUrl,
     title,
     masterProductCode,
-    imageUrl:
-      defaultVariant.imageUrl ??
-      normalizeText($("meta[property='og:image']").attr("content")) ??
-      null,
+    discountCode,
+    imageUrl: defaultVariant.imageUrl ?? getMetaImage($),
     defaultVariantCode: defaultVariantCode ?? defaultVariant.variantCode,
     variants,
   };
@@ -513,7 +592,7 @@ export function resolveDouglasProductHtml(
 
 export function buildDouglasSnapshot(
   resolved: ResolvedDouglasProduct,
-  extractor: "http" | "playwright",
+  extractor: ExtractorKind,
   variantCode?: string,
 ): ScrapedProductSnapshot {
   if (resolved.kind === "simple") {
@@ -527,6 +606,7 @@ export function buildDouglasSnapshot(
       variantLabel: resolved.variantLabel,
       price: resolved.price,
       originalPrice: resolved.originalPrice,
+      discountCode: resolved.discountCode,
       currency: "EUR",
       inStock: resolved.inStock,
       imageUrl: resolved.imageUrl,
@@ -559,6 +639,7 @@ export function buildDouglasSnapshot(
     variantLabel: variant.variantLabel,
     price: variant.price,
     originalPrice: variant.originalPrice,
+    discountCode: resolved.discountCode,
     currency: "EUR",
     inStock: variant.inStock,
     imageUrl: variant.imageUrl ?? resolved.imageUrl,

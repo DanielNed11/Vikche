@@ -2,8 +2,7 @@ import { useDashboard } from "./dashboard-context";
 import { Product } from "./product";
 
 export function ProductList() {
-  const { dashboard, watchGroups } = useDashboard();
-  const totalWatchCount = dashboard.watches.length;
+  const { watchGroups } = useDashboard();
 
   return (
     <section className="mt-10 w-full sm:mt-12">
@@ -21,16 +20,12 @@ export function ProductList() {
             {watchGroups.length}{" "}
             {watchGroups.length === 1 ? "продукт" : "продукта"}
           </p>
-          <p className="text-xs text-muted">
-            {totalWatchCount}{" "}
-            {totalWatchCount === 1 ? "следен вариант" : "следени варианта"}
-          </p>
         </div>
       </div>
 
       {watchGroups.length === 0 ? (
         <div className="rounded-[30px] border border-dashed border-white/80 bg-white/58 px-6 py-10 text-center text-sm leading-7 text-muted">
-          Добави първия продукт от Douglas, за да започнеш да следиш цените.
+          Добави първия продукт, за да започнеш да следиш цените.
         </div>
       ) : (
         <div className="space-y-4 sm:space-y-5">
