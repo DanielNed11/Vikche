@@ -1,4 +1,5 @@
-import { load } from "cheerio";
+import { load, type Cheerio } from "cheerio";
+import type { AnyNode } from "domhandler";
 
 import { extractDiscountCodeFromText } from "@/lib/discount-code";
 import { AppError } from "@/lib/http-error";
@@ -126,6 +127,16 @@ function parseDisplayedEuro(value: string) {
   );
 
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseDisplayedEuroValues(value: string) {
+  return Array.from(normalizeText(value).matchAll(/([\d\s.,]+)\s*€/gi))
+    .map((match) =>
+      Number.parseFloat(
+        match[1].replace(/\s+/g, "").replace(/\./g, "").replace(",", "."),
+      ),
+    )
+    .filter((price) => Number.isFinite(price));
 }
 
 function parseNumericPrice(value: unknown) {
@@ -298,6 +309,74 @@ function getPromoCodeOffer($: ReturnType<typeof load>) {
   };
 }
 
+type ConfigurablePromoOffer = {
+  contextText: string;
+  promoPrice: number;
+  regularPrice: number | null;
+  code: string | null;
+};
+
+function getPromoContextText(
+  $: ReturnType<typeof load>,
+  block: Cheerio<AnyNode>,
+) {
+  let current = block.parent();
+  let fallback = normalizeText(current.text());
+
+  while (current.length > 0) {
+    const text = normalizeText(current.text());
+
+    if (!fallback && text) {
+      fallback = text;
+    }
+
+    if (parseDisplayedEuroValues(text).length >= 2) {
+      return text;
+    }
+
+    current = current.parent();
+  }
+
+  return fallback;
+}
+
+function getConfigurablePromoOffers($: ReturnType<typeof load>) {
+  const offers: ConfigurablePromoOffer[] = [];
+
+  for (const element of $(".discount-block").toArray()) {
+    const block = $(element);
+    const promoPrice = parseDisplayedEuro(block.find(".discount-price").first().text());
+    const discountCode =
+      normalizeText(block.find(".discount-code").first().text()) ||
+      normalizeText(block.find("[data-promo-code]").first().attr("data-promo-code"));
+    const discountLabel = normalizeText(block.find(".discount-text").first().text());
+
+    if (promoPrice === null) {
+      continue;
+    }
+
+    if (!discountCode && !discountLabel.toLowerCase().includes("код")) {
+      continue;
+    }
+
+    const contextText = getPromoContextText($, block);
+    const contextPrices = parseDisplayedEuroValues(contextText);
+    const regularPrice =
+      contextPrices
+        .filter((price) => price > promoPrice)
+        .sort((left, right) => left - right)[0] ?? null;
+
+    offers.push({
+      contextText,
+      promoPrice,
+      regularPrice,
+      code: discountCode || null,
+    });
+  }
+
+  return offers;
+}
+
 function getVisibilityPayload(html: string) {
   return extractJsonAfterMarker<DouglasUtagPayload>(html, "utag_data:");
 }
@@ -378,13 +457,43 @@ function getVariantPayload(
   );
 }
 
+function pricesApproximatelyEqual(left: number | null, right: number | null) {
+  if (left === null || right === null) {
+    return false;
+  }
+
+  return Math.abs(left - right) < 0.01;
+}
+
+function offerMatchesVariant(
+  offer: ConfigurablePromoOffer,
+  variantLabel: string | null,
+  variantText: string | null,
+  regularPrice: number,
+) {
+  const context = offer.contextText.toLowerCase();
+  const normalizedLabel = variantLabel?.toLowerCase() ?? "";
+  const normalizedText = variantText?.toLowerCase() ?? "";
+  const labelMatches = normalizedLabel ? context.includes(normalizedLabel) : false;
+  const textMatches = normalizedText ? context.includes(normalizedText) : false;
+
+  if (offer.regularPrice !== null && !pricesApproximatelyEqual(offer.regularPrice, regularPrice)) {
+    return false;
+  }
+
+  return labelMatches || textMatches;
+}
+
 function buildConfigurableVariants(
+  $: ReturnType<typeof load>,
   config: ConfigurableOptionConfig,
   utagData: DouglasUtagPayload | null,
   fallbackVariantText: string | null,
 ) {
   const variants: ResolvedVariantChoice[] = [];
   const seenCodes = new Set<string>();
+  const usedPromoOfferIndexes = new Set<number>();
+  const promoOffers = getConfigurablePromoOffers($);
   const simpleProducts = utagData?.simpleProducts;
   const attributes = Object.values(config.attributes ?? {});
 
@@ -408,11 +517,11 @@ function buildConfigurableVariants(
 
       const simpleProduct = getVariantPayload(simpleProducts, productId, variantCode);
       const priceFromConfig = getPriceFromOption(config, productId);
-      const currentPrice =
+      const basePrice =
         priceFromConfig?.price ??
         parseNumericPrice(firstText(simpleProduct?.primary_product_price));
 
-      if (currentPrice === null) {
+      if (basePrice === null) {
         continue;
       }
 
@@ -422,8 +531,24 @@ function buildConfigurableVariants(
         firstText(simpleProduct?.primary_product_color);
       const variantText =
         firstText(simpleProduct?.primary_product_size) ?? fallbackVariantText;
+      const matchingPromoOfferIndex = promoOffers.findIndex((offer, index) => {
+        if (usedPromoOfferIndexes.has(index)) {
+          return false;
+        }
+
+        return offerMatchesVariant(offer, variantLabel, variantText, basePrice);
+      });
+      const matchingPromoOffer =
+        matchingPromoOfferIndex >= 0 ? promoOffers[matchingPromoOfferIndex] : null;
+
+      if (matchingPromoOfferIndex >= 0) {
+        usedPromoOfferIndexes.add(matchingPromoOfferIndex);
+      }
+
+      const currentPrice = matchingPromoOffer?.promoPrice ?? basePrice;
       const originalPrice = normalizeOldPrice(
         currentPrice,
+        matchingPromoOffer?.regularPrice ??
         priceFromConfig?.originalPrice ??
           parseNumericPrice(firstText(simpleProduct?.primary_product_price_regular)),
       );
@@ -543,7 +668,7 @@ function resolveConfigurableProduct(
 
   const fallbackVariantText =
     getVisibleVariantText($) ?? firstText(utagData?.primary_product_size) ?? null;
-  const variants = buildConfigurableVariants(config, utagData, fallbackVariantText);
+  const variants = buildConfigurableVariants($, config, utagData, fallbackVariantText);
 
   if (variants.length === 0) {
     throw new AppError(
