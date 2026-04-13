@@ -513,3 +513,128 @@ test("resolveDouglasProductHtml prefers promo-code prices for configurable varia
     ],
   );
 });
+
+test("resolveDouglasProductHtml prefers swatch rulediscount prices for configurable variants", () => {
+  const html = `
+    <html>
+      <body>
+        <div class="product-view-custom-title">
+          <h1 itemprop="name">YVES SAINT LAURENT Libre Berry Crush</h1>
+        </div>
+        <div class="product-info-main">
+          <span class="sku-code">conf-91628</span>
+        </div>
+        <script>
+          window.component = {
+            utag_data: {
+              "currency": "EUR",
+              "primary_product_id": ["091627"],
+              "primary_product_master_id": ["conf-91628"],
+              "primary_product_master_name": ["YVES SAINT LAURENT Libre Berry Crush"],
+              "simpleProducts": {
+                "id-212776": {
+                  "primary_product_id": ["091627"],
+                  "primary_product_master_id": ["conf-91628"],
+                  "primary_product_price": ["104.00"],
+                  "primary_product_price_regular": ["104.00"],
+                  "primary_product_variant_name": ["30ML"],
+                  "primary_product_size": ["30ML"],
+                  "primary_product_availability_status": ["Available"]
+                },
+                "id-212777": {
+                  "primary_product_id": ["091628"],
+                  "primary_product_master_id": ["conf-91628"],
+                  "primary_product_price": ["147.00"],
+                  "primary_product_price_regular": ["147.00"],
+                  "primary_product_variant_name": ["50ML"],
+                  "primary_product_size": ["50ML"],
+                  "primary_product_availability_status": ["Available"]
+                }
+              }
+            }
+          };
+        </script>
+        <script>
+          const configurableOptionsComponent = initConfigurableOptions(
+            "212897",
+            {
+              "attributes": {
+                "145": {
+                  "id": "145",
+                  "options": [
+                    { "id": "50", "label": "30ML", "products": ["212776"] },
+                    { "id": "45", "label": "50ML", "products": ["212777"] }
+                  ]
+                }
+              },
+              "optionPrices": {
+                "212776": {
+                  "oldPrice": { "amount": 104 },
+                  "finalPrice": { "amount": 104 }
+                },
+                "212777": {
+                  "oldPrice": { "amount": 147 },
+                  "finalPrice": { "amount": 147 }
+                }
+              },
+              "images": {
+                "212776": [{ "full": "https://douglas.bg/media/30ml.jpg", "isMain": true }],
+                "212777": [{ "full": "https://douglas.bg/media/50ml.jpg", "isMain": true }]
+              },
+              "sku": {
+                "212776": "091627",
+                "212777": "091628"
+              },
+              "salable_product": {
+                "212776": { "is_salable": true },
+                "212777": { "is_salable": true }
+              },
+              "default_selected_product_id": "212776"
+            }
+          );
+          const swatchOptionsComponent = initSwatchOptions(
+            {
+              "145": {
+                "50": {
+                  "label": "30ML",
+                  "rulediscount": "<div class=\\"discount-block\\"><span class=\\"discount-price\\"><span class=\\"price\\">83,20 €<\\/span><\\/span><span class=\\"discount-text\\">с код<\\/span><span class=\\"discount-code\\">EGG20<\\/span><\\/div>"
+                },
+                "45": {
+                  "label": "50ML",
+                  "rulediscount": "<div class=\\"discount-block\\"><span class=\\"discount-price\\"><span class=\\"price\\">117,60 €<\\/span><\\/span><span class=\\"discount-text\\">с код<\\/span><span class=\\"discount-code\\">EGG20<\\/span><\\/div>"
+                }
+              }
+            }
+          );
+        </script>
+      </body>
+    </html>
+  `;
+
+  const resolved = resolveDouglasProductHtml(
+    html,
+    "https://douglas.bg/yves-saint-laurent-libre-berry-crush-conf-91628",
+  );
+
+  assert.equal(resolved.kind, "configurable");
+  assert.equal(resolved.discountCode, "EGG20");
+  assert.deepEqual(
+    resolved.variants.map((variant) => ({
+      code: variant.variantCode,
+      price: variant.price,
+      originalPrice: variant.originalPrice,
+    })),
+    [
+      {
+        code: "091627",
+        price: 83.2,
+        originalPrice: 104,
+      },
+      {
+        code: "091628",
+        price: 117.6,
+        originalPrice: 147,
+      },
+    ],
+  );
+});

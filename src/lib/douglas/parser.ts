@@ -32,6 +32,7 @@ interface ConfigurableOptionConfig {
   attributes?: Record<
     string,
     {
+      id?: string;
       options?: Array<{
         id?: string;
         label?: string;
@@ -61,6 +62,17 @@ interface ConfigurableOptionConfig {
   salable_product?: Record<string, { is_salable?: boolean }>;
   default_selected_product_id?: string | null;
 }
+
+type SwatchOptionConfigEntry = {
+  label?: string;
+  price?: string;
+  rulediscount?: string;
+};
+
+type SwatchOptionConfig = Record<
+  string,
+  Record<string, SwatchOptionConfigEntry>
+>;
 
 function normalizeText(value: string | undefined | null) {
   return value?.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim() ?? "";
@@ -407,6 +419,10 @@ function getConfigurablePayload(html: string) {
   }
 }
 
+function getSwatchConfigPayload(html: string) {
+  return extractJsonAfterMarker<SwatchOptionConfig>(html, "initSwatchOptions(");
+}
+
 function getPriceFromOption(config: ConfigurableOptionConfig, productId: string) {
   const optionPrice = config.optionPrices?.[productId];
   const currentPrice =
@@ -465,6 +481,39 @@ function pricesApproximatelyEqual(left: number | null, right: number | null) {
   return Math.abs(left - right) < 0.01;
 }
 
+function getPromoOfferFromSwatchOption(
+  swatchConfig: SwatchOptionConfig | null,
+  attributeId: string,
+  optionId: string,
+) {
+  const swatchOption = swatchConfig?.[attributeId]?.[optionId];
+  const rulediscount = normalizeText(swatchOption?.rulediscount);
+
+  if (!rulediscount) {
+    return null;
+  }
+
+  const $ = load(rulediscount);
+  const promoPrice = parseDisplayedEuro($(".discount-price").first().text());
+  const discountCode =
+    normalizeText($(".discount-code").first().text()) ||
+    normalizeText($("[data-promo-code]").first().attr("data-promo-code"));
+  const discountLabel = normalizeText($(".discount-text").first().text());
+
+  if (promoPrice === null) {
+    return null;
+  }
+
+  if (!discountCode && !discountLabel.toLowerCase().includes("код")) {
+    return null;
+  }
+
+  return {
+    promoPrice,
+    code: discountCode || null,
+  };
+}
+
 function offerMatchesVariant(
   offer: ConfigurablePromoOffer,
   variantLabel: string | null,
@@ -487,6 +536,7 @@ function offerMatchesVariant(
 function buildConfigurableVariants(
   $: ReturnType<typeof load>,
   config: ConfigurableOptionConfig,
+  swatchConfig: SwatchOptionConfig | null,
   utagData: DouglasUtagPayload | null,
   fallbackVariantText: string | null,
 ) {
@@ -531,6 +581,11 @@ function buildConfigurableVariants(
         firstText(simpleProduct?.primary_product_color);
       const variantText =
         firstText(simpleProduct?.primary_product_size) ?? fallbackVariantText;
+      const swatchPromoOffer = getPromoOfferFromSwatchOption(
+        swatchConfig,
+        attribute.id ?? "",
+        option.id ?? "",
+      );
       const matchingPromoOfferIndex = promoOffers.findIndex((offer, index) => {
         if (usedPromoOfferIndexes.has(index)) {
           return false;
@@ -545,7 +600,14 @@ function buildConfigurableVariants(
         usedPromoOfferIndexes.add(matchingPromoOfferIndex);
       }
 
-      const currentPrice = matchingPromoOffer?.promoPrice ?? basePrice;
+      const currentPrice =
+        swatchPromoOffer?.promoPrice ??
+        matchingPromoOffer?.promoPrice ??
+        basePrice;
+      const discountCode =
+        swatchPromoOffer?.code ??
+        matchingPromoOffer?.code ??
+        null;
       const originalPrice = normalizeOldPrice(
         currentPrice,
         matchingPromoOffer?.regularPrice ??
@@ -566,6 +628,7 @@ function buildConfigurableVariants(
         variantText,
         price: currentPrice,
         originalPrice,
+        discountCode,
         currency: "EUR",
         inStock,
         imageUrl: getVariantImage(config, productId),
@@ -652,9 +715,9 @@ function resolveConfigurableProduct(
   canonicalUrl: string,
   utagData: DouglasUtagPayload | null,
   config: ConfigurableOptionConfig,
+  swatchConfig: SwatchOptionConfig | null,
 ): ResolvedConfigurableProduct {
   const title = getTitle($) || firstText(utagData?.primary_product_master_name);
-  const discountCode = extractDiscountCodeFromText($("body").text());
   const masterProductCode =
     firstText(utagData?.primary_product_master_id) ||
     normalizeText($(".product-info-main .sku-code").first().text());
@@ -668,7 +731,13 @@ function resolveConfigurableProduct(
 
   const fallbackVariantText =
     getVisibleVariantText($) ?? firstText(utagData?.primary_product_size) ?? null;
-  const variants = buildConfigurableVariants($, config, utagData, fallbackVariantText);
+  const variants = buildConfigurableVariants(
+    $,
+    config,
+    swatchConfig,
+    utagData,
+    fallbackVariantText,
+  );
 
   if (variants.length === 0) {
     throw new AppError(
@@ -685,6 +754,10 @@ function resolveConfigurableProduct(
   const defaultVariant =
     variants.find((variant) => variant.variantCode === defaultVariantCode) ??
     variants[0];
+  const discountCode =
+    defaultVariant.discountCode ??
+    variants.find((variant) => variant.discountCode)?.discountCode ??
+    extractDiscountCodeFromText($("body").text());
 
   return {
     kind: "configurable",
@@ -707,9 +780,16 @@ export function resolveDouglasProductHtml(
   const $ = load(html);
   const utagData = getVisibilityPayload(html);
   const configurable = getConfigurablePayload(html);
+  const swatchConfig = getSwatchConfigPayload(html);
 
   if (configurable?.attributes && Object.keys(configurable.attributes).length > 0) {
-    return resolveConfigurableProduct($, canonicalUrl, utagData, configurable);
+    return resolveConfigurableProduct(
+      $,
+      canonicalUrl,
+      utagData,
+      configurable,
+      swatchConfig,
+    );
   }
 
   return resolveSimpleProduct($, canonicalUrl, utagData);
@@ -764,7 +844,7 @@ export function buildDouglasSnapshot(
     variantLabel: variant.variantLabel,
     price: variant.price,
     originalPrice: variant.originalPrice,
-    discountCode: resolved.discountCode,
+    discountCode: variant.discountCode ?? resolved.discountCode,
     currency: "EUR",
     inStock: variant.inStock,
     imageUrl: variant.imageUrl ?? resolved.imageUrl,

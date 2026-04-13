@@ -92,6 +92,7 @@ export interface ResolvedVariantChoice {
   variantText: string | null;
   price: number;
   originalPrice: number | null;
+  discountCode: string | null;
   currency: "EUR";
   inStock: boolean;
   imageUrl: string | null;
