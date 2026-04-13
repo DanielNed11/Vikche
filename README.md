@@ -1,10 +1,10 @@
 # Vikche
 
-Vikche is a product price tracker built as a Next.js web app. It accepts product URLs, stores tracked items in PostgreSQL through Prisma, uses Playwright-based scraping plus OpenAI-assisted generic extraction, keeps price history, and logs or emails price-drop notifications.
+Vikche is a product price tracker built as a Next.js web app. It accepts product URLs, stores tracked items in PostgreSQL through Prisma, uses HTTP fetching with Zyte fallback plus OpenAI-assisted generic extraction, keeps price history, and logs or emails price-drop notifications.
 
 ## What is implemented
 - Douglas connector with URL validation and canonicalization
-- Playwright scraping with generic multi-store fallback
+- HTTP scraping with Zyte HTML fallback
 - Prisma/PostgreSQL persistence with multi-store-ready core tables:
   - `Retailer`
   - `StoreProduct`
@@ -76,25 +76,19 @@ Optional:
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
 - `ZYTE_API_KEY`
-- `ZYTE_DOMAINS`
 
 If no Resend credentials are configured, notifications are still created and marked as `logged`.
 Vikche uses an allowlisted email list plus one fixed password from env for private access.
 
 ## Scraping
 
-Vikche uses Playwright for page fetching across stores. Generic stores are interpreted through OpenAI after the HTML is fetched.
+Vikche first tries a direct HTTP fetch. If the store blocks the request or returns a challenge page, Vikche retries through Zyte and then interprets the HTML.
 
-For stores that block direct browser fetching, Vikche can retry through Zyte when these variables are configured:
+Generic stores are interpreted through OpenAI after the HTML is fetched. Douglas continues to use its dedicated parser on top of the fetched HTML.
+
+For blocked stores, configure:
 
 - `ZYTE_API_KEY`
-- `ZYTE_DOMAINS`
-
-`ZYTE_DOMAINS` accepts a comma-separated list of hostnames or base domains that should use the Zyte fallback after a direct blocked response, for example:
-
-```env
-ZYTE_DOMAINS=zara.com,stradivarius.com,hm.com,jdsports.bg,notino.bg
-```
 
 ## Worker
 

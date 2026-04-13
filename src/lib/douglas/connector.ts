@@ -47,7 +47,7 @@ async function parseFetchedHtml(
   };
 }
 
-async function scrapeWithPlaywright(canonicalUrl: string) {
+async function scrapeFetchedHtml(canonicalUrl: string) {
   const { html, transport, attempts } = await fetchPageWithFallbacks(canonicalUrl);
 
   try {
@@ -70,7 +70,7 @@ async function resolveDouglasProductInternal(rawUrl: string) {
   const canonicalUrl = normalizeDouglasUrl(rawUrl);
 
   try {
-    const result = await scrapeWithPlaywright(canonicalUrl);
+    const result = await scrapeFetchedHtml(canonicalUrl);
 
     return {
       resolved: result.resolved,
@@ -82,11 +82,11 @@ async function resolveDouglasProductInternal(rawUrl: string) {
     const status = error instanceof AppError ? error.status : 502;
     const attempts =
       error instanceof BrowserFetchError
-        ? error.attempts
+          ? error.attempts
         : error instanceof HtmlCaptureError && error.attempts
           ? error.attempts
           : ([{
-              extractor: "playwright",
+              extractor: "http",
               ok: false,
               error: message,
             }] satisfies ScrapeAttemptDraft[]);

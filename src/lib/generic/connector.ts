@@ -33,7 +33,7 @@ export class GenericScrapeError extends AppError {
   }
 }
 
-async function scrapeWithPlaywright(rawUrl: string) {
+async function scrapeFetchedHtml(rawUrl: string) {
   const {
     html,
     finalUrl,
@@ -94,7 +94,7 @@ async function resolveGenericProductInternal(rawUrl: string) {
   const canonicalUrl = normalizeGenericUrl(rawUrl);
 
   try {
-    const result = await scrapeWithPlaywright(canonicalUrl);
+    const result = await scrapeFetchedHtml(canonicalUrl);
 
     return {
       resolved: result.resolved,
@@ -106,11 +106,11 @@ async function resolveGenericProductInternal(rawUrl: string) {
     const status = error instanceof AppError ? error.status : 502;
     const attempts =
       error instanceof BrowserFetchError
-        ? error.attempts
+          ? error.attempts
           : error instanceof HtmlCaptureError && error.attempts
             ? error.attempts
           : ([{
-              extractor: "playwright",
+              extractor: "http",
               ok: false,
               error: message,
             }] satisfies ScrapeAttemptDraft[]);
